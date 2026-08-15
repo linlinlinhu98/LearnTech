@@ -1,0 +1,28 @@
+# ============================================================
+# Lumen-Bailian 本地调试依赖
+# 说明：单元测试（tests/test_module3.py）离线运行，无需密钥、无需联网，
+#       是「下载后即可调试」的最小验证入口。
+# ============================================================
+
+# 核心：LLM 调用 / 联网搜索 / 向量嵌入均走 HTTP
+httpx>=0.27
+
+# 本地 HTTP 服务（deploy_starter/local_server.py）
+fastapi>=0.110
+uvicorn>=0.29
+
+# ---- 代码执行沙箱（可选）----
+# 仅当学习者代码用到 numpy/pandas/matplotlib 时才需要。
+# 未安装时沙箱内会正常抛出 ImportError，不影响其余功能。
+numpy
+pandas
+matplotlib
+
+# ---- 百炼平台部署（可选，平台已预装，本地调试不需要）----
+# deploy_starter/main.py 需要 agentscope / agentscope-runtime / aiohttp /
+# opentelemetry，这些在百炼平台环境中已预装；本地只在完整复现平台时安装：
+# agentscope
+# agentscope-runtime
+# aiohttp
+# opentelemetry-api
+# opentelemetry-sdk

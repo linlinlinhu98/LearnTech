@@ -1,0 +1,27 @@
+# ============================================================
+# Lumen-Bailian Docker Compose (Development)
+# ============================================================
+
+name: lumen-bailian
+
+services:
+  api:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY:-}
+      - DASHSCOPE_MODEL_CODE=${DASHSCOPE_MODEL_CODE:-qwen3.7-plus}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    volumes:
+      - ./app:/app/app:ro
+      - ./main.py:/app/main.py:ro
+      - ./config.yml:/app/config.yml:ro
+    command: ["python", "main.py", "--mode", "standalone"]

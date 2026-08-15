@@ -1,0 +1,59 @@
+# Bailian high-code Agent configuration
+APP_NAME: "Lumen-Bailian"
+DEBUG: false
+
+# ai_studio | third_party
+MODEL_PROVIDER: "third_party"
+
+# 模型配置
+# 代码优先读取环境变量（百炼平台会注入 DASHSCOPE_*），环境变量不存在时
+# 回退到本文件配置。上传百炼平台前：取消注释「百炼平台版」、注释掉「本地版」。
+
+# 本地终端测试版：Volcengine ARK（当前启用）
+# 密钥不要写在这里 —— 放在仓库根目录的 .env（已被 .gitignore 忽略）：
+#   DASHSCOPE_API_KEY=...
+DASHSCOPE_API_KEY: ""
+DASHSCOPE_MODEL_NAME: "doubao"
+DASHSCOPE_MODEL_CODE: "ep-20260807035509-zdm2t"
+DASHSCOPE_API_URL: "https://ark.cn-beijing.volces.com/api/v3"
+
+# 百炼平台版：平台注入密钥（上传前启用）
+# DASHSCOPE_API_KEY:
+# DASHSCOPE_MODEL_NAME: "qwen-plus"
+# DASHSCOPE_MODEL_CODE: "qwen-plus"
+# DASHSCOPE_API_URL: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+# Optional AI Studio / VPC OpenAI-compatible endpoint.
+VPC_OPENAI_API_URL:
+VPC_OPENAI_API_KEY:
+VPC_OPENAI_MODEL: ""
+VPC_HTTP_PROXY:
+
+# ---- Embedding：本地终端测试版（Volcengine 多模态嵌入，走 /embeddings/multimodal）----
+EMBEDDING_MODEL: "ep-m-20260807040902-9p4cn"
+EMBEDDING_DIM: 2048
+
+# ---- Embedding：百炼平台版（DashScope text-embedding-v3）----
+# EMBEDDING_MODEL: "text-embedding-v3"
+# EMBEDDING_DIM: 2048
+
+# ---- 联网搜索（Tavily）----
+# 免费注册：https://app.tavily.com  → 获取 API key 填入仓库根目录 .env：
+#   TAVILY_API_KEY=...
+# 不占用 LLM 调用预算（搜索走 Tavily 自己的搜索 API）。
+TAVILY_API_KEY: ""
+TAVILY_API_URL: "https://api.tavily.com/search"
+
+# Module 3: multi-agent tutor dispatcher budgets
+MAX_DISPATCH_ITERATIONS: 5
+MAX_DISPATCH_LLM_CALLS: 8
+
+# Module 3: code runner sandbox
+CODE_RUNNER_ENABLED: true
+CODE_RUNNER_TIMEOUT_SECONDS: 5
+
+LOG_LEVEL: "INFO"
+LOG_FILE_NAME: "lumen_bailian.log"
+START_HOST: "0.0.0.0"
+PORT: 8080
+SYNC_TIMEOUT_SECONDS: 600
