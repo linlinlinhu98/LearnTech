@@ -54,12 +54,10 @@ cp .env.example .env   # 然后编辑 .env，填入真实密钥
 
 `.env`（已被 `.gitignore` 忽略，**切勿提交**）里需要：
 
-| 变量 | 说明 |
-|---|---|
-| `DASHSCOPE_API_KEY` | LLM / 向量嵌入的密钥。本地调试默认走 Volcengine ARK（见 `deploy_starter/config.yml` 的 `DASHSCOPE_API_URL`）；部署到百炼平台时由平台自动注入，无需配置 |
-| `TAVILY_API_KEY` | 可选。真联网搜索用的 Tavily key（免费注册 https://app.tavily.com）。不填则联网搜索返回「未配置」提示 |
-
-> 不想配置密钥也能验证代码：直接跑第 4 步的离线单元测试，全程无需密钥、无需联网。
+| 变量                  | 说明                                                                                                                                                      |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DASHSCOPE_API_KEY` | LLM / 向量嵌入的密钥。本地调试默认走 Volcengine ARK（见`deploy_starter/config.yml` 的 `DASHSCOPE_API_URL`）；部署到百炼平台时由平台自动注入，无需配置 |
+| `TAVILY_API_KEY`    | 可选。真联网搜索用的 Tavily key（免费注册 https://app.tavily.com）。不填则联网搜索返回「未配置」提示                                                      |
 
 ### 4. 跑离线单元测试（无需密钥）
 
@@ -101,12 +99,12 @@ python tests/test_e2e.py "Rust 所有权是什么"   # 单问一句
 
 ## 与 Lumen 原版差异
 
-| Lumen 原版 | Lumen-Bailian |
-|---|---|
-| Groq Llama 3.3 70B | DashScope / Volcengine ARK（httpx OpenAI 兼容） |
-| PostgreSQL + pgvector | 内存知识库（生产可替换 pgvector） |
-| Cloudflare BGE 嵌入 (384d) | DashScope / Volcengine 嵌入 (2048d) |
-| MCP Server（9 工具） | REST API + 5 子代理工具 |
+| Lumen 原版                 | Lumen-Bailian                                   |
+| -------------------------- | ----------------------------------------------- |
+| Groq Llama 3.3 70B         | DashScope / Volcengine ARK（httpx OpenAI 兼容） |
+| PostgreSQL + pgvector      | 内存知识库（生产可替换 pgvector）               |
+| Cloudflare BGE 嵌入 (384d) | DashScope / Volcengine 嵌入 (2048d)             |
+| MCP Server（9 工具）       | REST API + 5 子代理工具                         |
 
 ## 参考
 
