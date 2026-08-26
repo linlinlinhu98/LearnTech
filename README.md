@@ -16,7 +16,7 @@ lumen-bailian/
 │   ├── config.yml          # 非敏感配置（模型标识 / 开关 / 预算）
 │   ├── dispatcher.py       # 模块三：多智能体调度器（并发执行子代理）
 │   ├── code_runner.py      # 模块三：受限 Python 代码沙箱
-│   ├── tutor_core.py       # 5 子代理工具注册 + Tavily 联网搜索
+│   ├── tutor_core.py       # 5 子代理工具注册（检索/联网搜索/代码/出题/讲解）
 │   ├── knowledge_store.py  # 课程作用域检索 + ACL（含演示数据 seed_demo_data）
 │   ├── llm_utils.py        # httpx LLM 调用 + .env 加载 + JSON 解析
 │   ├── prompts.py          # 各阶段 Prompt
@@ -85,9 +85,27 @@ python tests/test_e2e.py "Rust 所有权是什么"   # 单问一句
 
 会真实调用 LLM / 搜索 / 代码沙箱，并打印每个子代理的分工与最终综合回答。
 
-## 联网搜索
+## 联网搜索（⚠️ 平台限制，详见下方）
 
-模块三的 `web_search` 已接入 **Tavily 真搜索**（`POST https://api.tavily.com/search`），返回 `answer + 来源标题/链接/摘要`，不占用 LLM 调用预算。配置见第 3 步的 `TAVILY_API_KEY`。
+**当前状态**：模块三的 `web_search` 使用**模型预训练知识**回答，**不是**真联网搜索。
+
+已尝试但因平台限制无法使用的方案：
+
+| 方案 | 失败原因 |
+|------|---------|
+| Tavily | 百炼平台未配置 `TAVILY_API_KEY` |
+| DuckDuckGo | 国内网络环境 `ConnectTimeout` 无法访问 |
+| DashScope `enable_search=True` | 平台 AgentScope Java 运行时对所有 LLM 调用施加 10 秒硬超时，联网搜索无法在期限内完成 |
+| 绕过 AgentScope 直接 httpx 调 DashScope | 平台统一路由，所有 LLM 请求均经过 Java 运行时超时拦截 |
+
+**影响**：`web_search` 依赖模型知识（Qwen-plus，训练数据截至 2024 年底），无法获取实时网页信息。`retrieve`（课程内容检索）不受影响。
+
+**未来解决方案**（需平台侧支持）：
+1. 平台开放搜索 API（类似 Tavily/Bing/Google），且在平台网络环境下可访问
+2. AgentScope Java 运行时超时限制放宽或提供白名单机制
+3. 使用 MCP Server 接入外部搜索服务（如高德地图 MCP）
+
+如需真联网搜索，可自行在 `tutor_core.py` 的 `_model_knowledge_search` 中接入其他免 key 搜索 API（如国内可访问的搜索服务）。
 
 ## 代码执行沙箱
 
@@ -110,4 +128,3 @@ python tests/test_e2e.py "Rust 所有权是什么"   # 单问一句
 
 - 原版 Lumen：https://github.com/ahmedEid1/lumen
 - 百炼平台：https://bailian.console.aliyun.com/
-- Tavily：https://app.tavily.com
