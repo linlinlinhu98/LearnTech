@@ -130,21 +130,25 @@ async def search_web(query: str, budget: LlmBudget | None = None) -> str:
             pass  # Tavily failed — fall through to DashScope
 
     # --- DashScope fallback (uses platform-injected DASHSCOPE_API_KEY) ---
+    # Call a dedicated chat completion with enable_search=True, separate from
+    # the main LLM.  Use a tighter total timeout so a slow search doesn't block
+    # the whole tutoring turn.
     if not _charge(budget):
         return "[联网搜索：LLM 预算已耗尽，无法进行联网搜索]"
 
+    from .llm_utils import chat_completion as _cc
     messages = [
         {
             "role": "user",
             "content": (
-                f"请针对「{query}」进行联网搜索，返回一段简洁的中文摘要 "
-                "（3-5句），并列出 3-5 条搜索来源（标题 + 链接）。"
+                f"请针对「{query}」搜索相关信息，返回简洁中文摘要 "
+                "（3-5句），并列出 3 条来源（标题 + URL）。"
             ),
         }
     ]
     try:
-        result = await chat_completion(messages, enable_search=True, max_tokens=1024)
-        if result.startswith("[LLM"):
+        result = await _cc(messages, enable_search=True, max_tokens=1024)
+        if result.startswith("[LLM") or result.startswith("[联网"):
             return f"[联网搜索失败: {result}]"
         return result
     except Exception as exc:

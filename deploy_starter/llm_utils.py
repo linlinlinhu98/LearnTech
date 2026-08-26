@@ -141,15 +141,20 @@ async def chat_completion(
         # DashScope built-in web search — no extra API key needed
         payload["extra_body"] = {"enable_search": True}
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        resp = await client.post(
-            url,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-        )
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(10.0, connect=8.0)
+    ) as client:
+        try:
+            resp = await client.post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+        except httpx.TimeoutException:
+            return "[LLM 调用超时，请减少问题复杂度或稍后重试]"
         if not resp.is_success:
             return f"[LLM 调用失败: HTTP {resp.status_code}]"
 
