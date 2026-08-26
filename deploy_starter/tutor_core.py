@@ -50,7 +50,7 @@ async def retrieve_course(
 
     try:
         query_emb = embedding_provider.embed([query])[0]
-        results = knowledge_store.search(query_emb, top_k=top_k)
+        results = knowledge_store.search(query_emb, top_k=top_k, course_id=course_id or "")
     except Exception as exc:
         return json.dumps(
             {"results": [], "error": f"检索失败: {exc}"},

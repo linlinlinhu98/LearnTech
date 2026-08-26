@@ -25,6 +25,8 @@ from fastapi.responses import JSONResponse
 
 # ---- Lumen imports (dual-mode: package vs direct execution) ----
 try:
+    from . import authoring as _authoring_mod
+    from . import intake as _intake_mod
     from .knowledge_store import (
         LessonChunk,
         embedding_provider,
@@ -34,6 +36,8 @@ try:
     from .dispatcher import TutorDispatcher
     from .tutor_core import build_tool_registry
 except ImportError:  # Direct execution / local tests
+    import authoring as _authoring_mod
+    import intake as _intake_mod
     from knowledge_store import (
         LessonChunk,
         embedding_provider,
@@ -135,9 +139,14 @@ async def knowledge_search(request: Request):
     query = (body.get("query") or "").strip()
     if not query:
         return JSONResponse(status_code=400, content={"error": "query is required"})
+    course_id = str(body.get("course_id") or "")
     try:
         query_emb = embedding_provider.embed([query])[0]
-        results = knowledge_store.search(query_emb, top_k=body.get("top_k", 5))
+        results = knowledge_store.search(
+            query_emb,
+            top_k=body.get("top_k", 5),
+            course_id=course_id,
+        )
     except Exception as exc:
         return _ok(
             data={"query": query, "results": [], "error": str(exc)},
@@ -145,16 +154,141 @@ async def knowledge_search(request: Request):
         )
     return _ok(data={
         "query": query,
+        "course_id": course_id,
         "results": [
             {
                 "lesson_id": chunk.lesson_id,
                 "lesson_title": chunk.lesson_title,
+                "course_id": chunk.course_id,
                 "text_preview": chunk.text[:200],
                 "similarity_score": round(score, 4),
             }
             for chunk, score in results
         ],
     })
+
+
+# ============================================================
+# Module 1: Guided Intake (Learning Brief)
+# ============================================================
+_intake_mgr = _intake_mod.get_intake_manager()
+
+
+@app.post("/api/v1/intake/start")
+async def intake_start(request: Request):
+    """Start a new intake session for a user."""
+    body = await request.json()
+    user_id = str(body.get("user_id") or str(uuid.uuid4())[:8])
+    session = _intake_mgr.start(user_id)
+    first_question = _intake_mod.IntakeManager._default_next_question(session)
+    return _ok(data={
+        "session_id": session.user_id,
+        "state": session.state,
+        "round": session.round,
+        "max_rounds": 6,
+        "brief": dict(session.brief),
+        "next_question": first_question,
+    })
+
+
+@app.post("/api/v1/intake/respond")
+async def intake_respond(request: Request):
+    """Feed a user message into the active intake session and get the next question or confirmed brief."""
+    body = await request.json()
+    user_id = str(body.get("user_id") or "")
+    message = str(body.get("message") or "")
+    if not user_id:
+        return JSONResponse(status_code=400, content={"error": "user_id is required"})
+    result = _intake_mgr.respond(user_id, message)
+    return _ok(data=result)
+
+
+@app.post("/api/v1/intake/status")
+async def intake_status(request: Request):
+    """Get the current state of an intake session."""
+    body = await request.json()
+    user_id = str(body.get("user_id") or "")
+    session = _intake_mgr.get(user_id)
+    if not session:
+        return _ok(data={"state": "NOT_FOUND"})
+    return _ok(data={
+        "session_id": session.user_id,
+        "state": session.state,
+        "round": session.round,
+        "brief": dict(session.brief),
+    })
+
+
+@app.post("/api/v1/intake/cancel")
+async def intake_cancel(request: Request):
+    """Cancel the active intake session."""
+    body = await request.json()
+    user_id = str(body.get("user_id") or "")
+    _intake_mgr.cancel(user_id)
+    return _ok(message="intake session cancelled")
+
+
+# ============================================================
+# Module 2: Course Management
+# ============================================================
+
+@app.post("/api/v1/courses/generate")
+async def generate_course(request: Request):
+    """Run the 6-stage authoring pipeline to generate a course from a LearningBrief.
+
+    Body: {"brief": {"goal": "...", "current_level": "...", ...}}
+    """
+    body = await request.json()
+    brief = body.get("brief") or {}
+    if not brief.get("goal"):
+        return JSONResponse(status_code=400, content={"error": "brief.goal is required"})
+
+    pipeline = _authoring_mod.AuthoringPipeline()
+    result = await pipeline.run(brief)
+
+    # Ingest chunks into knowledge store
+    chunks = _authoring_mod.ingest_course(
+        result.get("raw_content", {}),
+        course_title=result.get("raw_content", {}).get("course_title", ""),
+    )
+    course_id = result.get("course_id", "")
+    course_title = result.get("raw_content", {}).get("course_title", "")
+
+    chunk_objs, texts = [], []
+    for c in chunks:
+        chunk_objs.append(LessonChunk(
+            id=c["id"],
+            lesson_id=c["lesson_id"],
+            lesson_title=c["lesson_title"],
+            section_id=c.get("section_id", ""),
+            text=c["text"],
+            course_id=course_id,
+            course_title=course_title,
+        ))
+        texts.append(c["text"])
+
+    try:
+        embeddings = embedding_provider.embed(texts)
+    except Exception:
+        embeddings = embedding_provider._noop_embed(texts)
+
+    knowledge_store.add_chunks(chunk_objs, embeddings)
+
+    return _ok(data={
+        "course_id": course_id,
+        "course_title": course_title,
+        "outline": result.get("outline", {}),
+        "final_verdict": result.get("final_verdict", {}),
+        "llm_calls_used": result.get("llm_calls_used", 0),
+        "chunks_ingested": len(chunk_objs),
+        "pipeline_stage": result.get("pipeline_stage", {}),
+    })
+
+
+@app.post("/api/v1/courses/list")
+def list_courses():
+    """List all courses stored in the knowledge base."""
+    return _ok(data={"courses": knowledge_store.list_courses()})
 
 
 @app.post("/api/v1/knowledge/ingest")
@@ -164,6 +298,9 @@ async def knowledge_ingest(request: Request):
     if not raw_chunks:
         return JSONResponse(status_code=400, content={"error": "chunks is required"})
 
+    course_id = str(body.get("course_id") or "")
+    course_title = str(body.get("course_title") or "")
+
     chunks, texts = [], []
     for c in raw_chunks:
         chunks.append(LessonChunk(
@@ -171,7 +308,8 @@ async def knowledge_ingest(request: Request):
             lesson_id=c.get("lesson_id", ""),
             lesson_title=c.get("lesson_title", "Untitled"),
             text=c.get("text", ""),
-            course_title=body.get("course_title", ""),
+            course_id=course_id,
+            course_title=course_title,
         ))
         texts.append(c.get("text", ""))
 
@@ -182,9 +320,16 @@ async def knowledge_ingest(request: Request):
 
     knowledge_store.add_chunks(chunks, embeddings)
     return _ok(data={
+        "course_id": course_id,
         "chunks_ingested": len(chunks),
         "total_chunks": len(knowledge_store),
     })
+
+
+@app.post("/api/v1/knowledge/courses")
+def list_courses():
+    """List all courses stored in the knowledge base."""
+    return _ok(data={"courses": knowledge_store.list_courses()})
 
 
 # ============================================================

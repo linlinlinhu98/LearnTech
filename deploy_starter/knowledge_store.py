@@ -23,11 +23,23 @@ load_dotenv()  # make sure .env secrets (DASHSCOPE_API_KEY etc.) are loaded
 
 @dataclass
 class LessonChunk:
-    """A chunk of lesson content."""
+    """A chunk of lesson content.
+
+    Attributes:
+        id: unique chunk identifier within the course.
+        lesson_id: parent lesson identifier.
+        lesson_title: human-readable lesson title.
+        section_id: parent section identifier (optional, for authored courses).
+        text: chunk body text.
+        course_id: "" = public/no-filter; per-course chunks set this.
+        course_title: title of the parent course.
+    """
     id: str
     lesson_id: str
     lesson_title: str
     text: str
+    section_id: str = ""
+    course_id: str = ""
     course_title: str = ""
 
 
@@ -189,11 +201,19 @@ class KnowledgeStore:
         for chunk, emb in zip(chunks, embeddings):
             self._chunks.append((chunk, emb))
 
-    def search(self, query_embedding: list[float], top_k: int = 5) -> list[tuple[LessonChunk, float]]:
+    def search(
+        self,
+        query_embedding: list[float],
+        top_k: int = 5,
+        course_id: str = "",
+    ) -> list[tuple[LessonChunk, float]]:
         if not self._chunks:
             return []
         results = []
         for chunk, emb in self._chunks:
+            # course_id="" means public/no-filter; otherwise match exactly
+            if course_id and chunk.course_id and chunk.course_id != course_id:
+                continue
             sim = self._cosine_similarity(query_embedding, emb)
             results.append((chunk, sim))
         results.sort(key=lambda x: x[1], reverse=True)
@@ -210,6 +230,20 @@ class KnowledgeStore:
 
     def __len__(self) -> int:
         return len(self._chunks)
+
+    def list_courses(self) -> list[dict]:
+        """Return unique (course_id, course_title, chunk_count) for all stored chunks."""
+        seen: dict[str, dict] = {}
+        for chunk, _ in self._chunks:
+            cid = chunk.course_id or "_public_"
+            if cid not in seen:
+                seen[cid] = {
+                    "course_id": chunk.course_id or "",
+                    "course_title": chunk.course_title or "公共课程",
+                    "chunk_count": 0,
+                }
+            seen[cid]["chunk_count"] += 1
+        return list(seen.values())
 
 
 # ---- Demo Data ----
@@ -318,6 +352,7 @@ def seed_demo_data():
             lesson_id=c["lesson_id"],
             lesson_title=c["lesson_title"],
             text=c["text"],
+            course_id="demo_python",          # all demo chunks belong to this course
             course_title=DEMO_COURSE,
         ))
         texts.append(c["text"])
