@@ -80,56 +80,75 @@ async def retrieve_course(
 # 2. Web Searcher (0 LLM calls — live Tavily search API)
 # ---------------------------------------------------------------------------
 async def search_web(query: str, budget: LlmBudget | None = None) -> str:
-    """Search the live web via Tavily and return an answer + cited sources.
+    """Search the live web, returning an answer + cited sources.
 
-    This is a search-API call, not an LLM call, so it does not charge the
-    dispatcher's LLM budget. ``budget`` is accepted for interface consistency
-    with the other sub-agents.
+    Priority:
+      1. Tavily — higher quality (title + url + content + answer).
+      2. DashScope enable_search — works with only the platform-injected
+         DashScope key; charges 1 LLM call against the budget.
+
+    ``budget`` is accepted for interface consistency with the other sub-agents.
     """
     query = (query or "").strip()
     if not query:
         return "[联网搜索：缺少查询词]"
 
-    api_key = get_config("TAVILY_API_KEY")
-    if not api_key:
-        return "[联网搜索未配置 TAVILY_API_KEY，请在 config.yml 或环境变量中填入 Tavily API key]"
+    # --- Try Tavily first (free, no LLM budget cost) ---
+    tavily_key = get_config("TAVILY_API_KEY")
+    if tavily_key:
+        url = get_config("TAVILY_API_URL", "https://api.tavily.com/search")
+        payload = {
+            "api_key": tavily_key,
+            "query": query,
+            "search_depth": "basic",
+            "max_results": 5,
+            "include_answer": True,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(url, json=payload)
+            if resp.is_success:
+                data = resp.json()
+                answer = (data.get("answer") or "").strip()
+                results = data.get("results") or []
+                if answer or results:
+                    lines: list[str] = []
+                    if answer:
+                        lines.append(answer)
+                    if results:
+                        lines.append("")
+                        lines.append("来源：")
+                        for i, r in enumerate(results[:5], start=1):
+                            title = (r.get("title") or "").strip()
+                            link = (r.get("url") or "").strip()
+                            content = (r.get("content") or "").strip()
+                            lines.append(f"{i}. {title} ({link})")
+                            if content:
+                                lines.append(f"   {content[:300]}")
+                    return "\n".join(lines)
+        except Exception:
+            pass  # Tavily failed — fall through to DashScope
 
-    url = get_config("TAVILY_API_URL", "https://api.tavily.com/search")
-    payload = {
-        "api_key": api_key,
-        "query": query,
-        "search_depth": "basic",
-        "max_results": 5,
-        "include_answer": True,
-    }
+    # --- DashScope fallback (uses platform-injected DASHSCOPE_API_KEY) ---
+    if not _charge(budget):
+        return "[联网搜索：LLM 预算已耗尽，无法进行联网搜索]"
+
+    messages = [
+        {
+            "role": "user",
+            "content": (
+                f"请针对「{query}」进行联网搜索，返回一段简洁的中文摘要 "
+                "（3-5句），并列出 3-5 条搜索来源（标题 + 链接）。"
+            ),
+        }
+    ]
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(url, json=payload)
-        if not resp.is_success:
-            return f"[联网搜索失败: HTTP {resp.status_code}]"
-        data = resp.json()
+        result = await chat_completion(messages, enable_search=True, max_tokens=1024)
+        if result.startswith("[LLM"):
+            return f"[联网搜索失败: {result}]"
+        return result
     except Exception as exc:
         return f"[联网搜索失败: {exc}]"
-
-    answer = (data.get("answer") or "").strip()
-    results = data.get("results") or []
-    if not answer and not results:
-        return "[联网搜索：未返回任何结果]"
-
-    lines: list[str] = []
-    if answer:
-        lines.append(answer)
-    if results:
-        lines.append("")
-        lines.append("来源：")
-        for i, r in enumerate(results[:5], start=1):
-            title = (r.get("title") or "").strip()
-            link = (r.get("url") or "").strip()
-            content = (r.get("content") or "").strip()
-            lines.append(f"{i}. {title} ({link})")
-            if content:
-                lines.append(f"   {content[:300]}")
-    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------

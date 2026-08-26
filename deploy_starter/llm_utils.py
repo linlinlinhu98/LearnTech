@@ -112,8 +112,15 @@ async def chat_completion(
     messages: list[dict[str, str]],
     temperature: float = 0.3,
     max_tokens: int = 2048,
+    enable_search: bool = False,
 ) -> str:
-    """Make an OpenAI-compatible chat completion request via httpx."""
+    """Make an OpenAI-compatible chat completion request via httpx.
+
+    When ``enable_search=True`` the request is sent with DashScope's
+    ``extra_body["enable_search": true]`` which activates the model's built-in
+    web-search capability (no extra API key needed — only the DashScope key is
+    required, which the platform injects automatically).
+    """
     api_key = _cfg("DASHSCOPE_API_KEY")
     if not api_key:
         return "[未配置 API Key，无法调用 LLM]"
@@ -124,12 +131,15 @@ async def chat_completion(
     )
     url = f"{api_url}/chat/completions"
 
-    payload = {
+    payload: dict[str, Any] = {
         "model": model,
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
+    if enable_search:
+        # DashScope built-in web search — no extra API key needed
+        payload["extra_body"] = {"enable_search": True}
 
     async with httpx.AsyncClient(timeout=60.0) as client:
         resp = await client.post(
