@@ -77,68 +77,90 @@ async def retrieve_course(
 
 
 # ---------------------------------------------------------------------------
-# 2. Web Searcher (0 LLM calls — live Tavily search API)
+# 2. Web Searcher (1 LLM call — model knowledge, no external HTTP)
+#
+# Platform constraints that force this design:
+#   • Tavily         — needs TAVILY_API_KEY (platform has none configured)
+#   • DuckDuckGo     — unreachable from this environment (ConnectTimeout)
+#   • DashScope
+#     enable_search   — routes through AgentScope Java HTTP client which has a
+#                       hard 10-second timeout; causes
+#                       "Did not observe any item..." errors on every query
+#                       even when we call via our own httpx (platform routing)
+#
+# Therefore search_web delegates to the LLM's pre-trained knowledge directly.
+# This avoids any external HTTP call and is guaranteed to work on the platform.
+# Cost: 1 LLM call.  Answer quality depends on the model's training cutoff.
 # ---------------------------------------------------------------------------
+
 async def search_web(query: str, budget: LlmBudget | None = None) -> str:
-    """Search the live web via Tavily; returns answer + cited sources.
+    """Answer using the model's built-in knowledge (no external search).
 
-    DashScope enable_search is NOT used — it routes through the platform's
-    Java runtime which has a hard 10-second HTTP timeout, causing
-    "Did not observe any item..." errors when search takes longer.
-    Tavily calls httpx directly (outside the Java sandbox), no such limit.
-
-    budget is accepted for interface consistency (Tavily is free, 0 LLM cost).
+    The deployed model (Qwen-plus) has knowledge up to late 2024 and can answer
+    most learning-related questions without external search.
+    Completely bypasses the 10s Java-runtime timeout.
     """
     query = (query or "").strip()
     if not query:
         return "[联网搜索：缺少查询词]"
 
-    tavily_key = get_config("TAVILY_API_KEY")
-    if not tavily_key:
-        return (
-            "[联网搜索暂不可用：未配置 TAVILY_API_KEY。"
-            " 请在平台环境变量中添加 Tavily API key（免费 https://app.tavily.com），"
-            " 或尝试检索课程内容 /retrieve]"
-        )
+    if budget is None or _charge(budget):
+        return await _model_knowledge_search(query)
+    return "[联网搜索：LLM 调用预算已耗尽，请减少问题数量]"
 
-    url = get_config("TAVILY_API_URL", "https://api.tavily.com/search")
+
+async def _model_knowledge_search(query: str) -> str:
+    """Use the LLM's pre-trained knowledge to answer without any external call."""
+    model = get_config("DASHSCOPE_MODEL_CODE", "qwen-plus")
+    api_key = get_config("DASHSCOPE_API_KEY")
+    api_url = get_config(
+        "DASHSCOPE_API_URL",
+        "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    )
+    url = f"{api_url.rstrip('/')}/chat/completions"
+
     payload = {
-        "api_key": tavily_key,
-        "query": query,
-        "search_depth": "basic",
-        "max_results": 5,
-        "include_answer": True,
+        "model": model,
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    f"你是一位知识渊博的AI助教。请针对「{query}」给出准确、"
+                    "条理清晰的中文回答，结合你的知识库尽量全面。如果问题涉及"
+                    "最新事件或你不确定的信息，请明确告知。回答需要有结构，"
+                    "适当分点，适当举例，便于学习者理解。"
+                ),
+            }
+        ],
+        "temperature": 0.3,
+        "max_tokens": 1536,
     }
+
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(url, json=payload)
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(60.0, connect=15.0)
+        ) as client:
+            resp = await client.post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
         if not resp.is_success:
-            return f"[联网搜索失败: HTTP {resp.status_code}]"
+            return f"[联网搜索失败: HTTP {resp.status_code}，模型知识回答也失败]"
         data = resp.json()
-    except httpx.TimeoutException:
-        return "[联网搜索超时，请稍后重试]"
-    except Exception as exc:
-        return f"[联网搜索失败: {exc}]"
+        content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        if content and content.strip():
+            return content.strip()
+    except Exception:
+        pass
 
-    answer = (data.get("answer") or "").strip()
-    results = data.get("results") or []
-    if not answer and not results:
-        return "[联网搜索：未找到相关结果]"
-
-    lines: list[str] = []
-    if answer:
-        lines.append(answer)
-    if results:
-        lines.append("")
-        lines.append("来源：")
-        for i, r in enumerate(results[:5], start=1):
-            title = (r.get("title") or "").strip()
-            link = (r.get("url") or "").strip()
-            content = (r.get("content") or "").strip()
-            lines.append(f"{i}. {title} ({link})")
-            if content:
-                lines.append(f"   {content[:300]}")
-    return "\n".join(lines)
+    return (
+        "[联网搜索暂时不可用，且模型回答也失败。"
+        "建议：1) 尝试检索课程内容 /retrieve；2) 换关键词重试]"
+    )
 
 
 # ---------------------------------------------------------------------------
