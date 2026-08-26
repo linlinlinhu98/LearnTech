@@ -77,20 +77,34 @@ async def retrieve_course(
 
 
 # ---------------------------------------------------------------------------
-# 2. Web Searcher (1 LLM call — model knowledge, no external HTTP)
+# 2. Web Searcher
 #
-# Platform constraints that force this design:
-#   • Tavily         — needs TAVILY_API_KEY (platform has none configured)
-#   • DuckDuckGo     — unreachable from this environment (ConnectTimeout)
-#   • DashScope
-#     enable_search   — routes through AgentScope Java HTTP client which has a
-#                       hard 10-second timeout; causes
-#                       "Did not observe any item..." errors on every query
-#                       even when we call via our own httpx (platform routing)
+# 已尝试的方案及平台限制：
 #
-# Therefore search_web delegates to the LLM's pre-trained knowledge directly.
-# This avoids any external HTTP call and is guaranteed to work on the platform.
-# Cost: 1 LLM call.  Answer quality depends on the model's training cutoff.
+# 方案 A — DashScope enable_search=True（联网搜索，模型自带）
+#   payload["extra_body"] = {"enable_search": True}
+#   状态：❌ 平台 AgentScope Java 运行时对所有 LLM 调用施加 10 秒硬超时，
+#         联网搜索无法在期限内完成，始终报错
+#         "Did not observe any item...within 10000ms in 'flatMap'"
+#
+# 方案 B — Tavily（免费 key，https://app.tavily.com）
+#   POST https://api.tavily.com/search  {api_key, query, search_depth, max_results}
+#   状态：❌ 百炼平台未配置 TAVILY_API_KEY，返回 "TVILY_API_KEY not configured"
+#
+# 方案 C — DuckDuckGo Instant Answer（免 key，https://api.duckduckgo.com）
+#   GET https://api.duckduckgo.com/?q={query}&format=json
+#   状态：❌ 国内网络环境 ConnectTimeout，无法访问
+#
+# 方案 D — 直接 httpx 调 DashScope（绕过 AgentScope）
+#   状态：❌ 平台统一路由，所有 LLM 请求均经过 Java 运行时超时拦截，
+#         enable_search=True 仍触发 10s 超时
+#
+# 方案 E（当前采用）— 模型预训练知识
+#   直接让 LLM 回答，不带 enable_search，不发往 AgentScope
+#   状态：✅ 正常工作，绕过 10s 超时
+#   缺点：依赖模型训练数据（Qwen-plus 截至 2024 年底），无法获取实时信息
+#
+# 如需启用上述任一方案，只需取消对应 payload 的注释，并注释掉方案 E。
 # ---------------------------------------------------------------------------
 
 async def search_web(query: str, budget: LlmBudget | None = None) -> str:
@@ -136,6 +150,16 @@ async def _model_knowledge_search(query: str) -> str:
         "max_tokens": 1536,
     }
 
+    # === 方案 A（已废弃）：DashScope 联网搜索 ===
+    # 平台 Java 运行时 10s 超时，开通后将 extra_body 取消注释即可启用
+    # payload["extra_body"] = {"enable_search": True}
+
+    # === 方案 B（已废弃）：Tavily 真联网搜索 ===
+    # 百炼平台未配置 key，如需启用：
+    # 1. 在 https://app.tavily.com 注册免费 key
+    # 2. 在平台环境变量中添加 TAVILY_API_KEY
+    # 3. 取消下方 _tavily_search 的注释，并将 search_web 改为调用它
+
     try:
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(60.0, connect=15.0)
@@ -161,6 +185,48 @@ async def _model_knowledge_search(query: str) -> str:
         "[联网搜索暂时不可用，且模型回答也失败。"
         "建议：1) 尝试检索课程内容 /retrieve；2) 换关键词重试]"
     )
+
+
+# === 方案 B 备用（取消注释即可启用）===
+# async def _tavily_search(query: str) -> str | None:
+#     """Search via Tavily API. Returns None if key is missing or call fails."""
+#     tavily_key = get_config("TAVILY_API_KEY")
+#     if not tavily_key:
+#         return None
+#     url = get_config("TAVILY_API_URL", "https://api.tavily.com/search")
+#     payload = {
+#         "api_key": tavily_key,
+#         "query": query,
+#         "search_depth": "basic",
+#         "max_results": 5,
+#         "include_answer": True,
+#     }
+#     try:
+#         async with httpx.AsyncClient(timeout=30.0) as client:
+#             resp = await client.post(url, json=payload)
+#         if not resp.is_success:
+#             return None
+#         data = resp.json()
+#         answer = (data.get("answer") or "").strip()
+#         results = data.get("results") or []
+#         if not answer and not results:
+#             return None
+#         lines = []
+#         if answer:
+#             lines.append(answer)
+#         if results:
+#             lines.append("")
+#             lines.append("来源：")
+#             for i, r in enumerate(results[:5], 1):
+#                 title = (r.get("title") or "").strip()
+#                 link = (r.get("url") or "").strip()
+#                 content = (r.get("content") or "").strip()
+#                 lines.append(f"{i}. {title} ({link})")
+#                 if content:
+#                     lines.append(f"   {content[:300]}")
+#         return "\n".join(lines)
+#     except Exception:
+#         return None
 
 
 # ---------------------------------------------------------------------------
