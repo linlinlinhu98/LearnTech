@@ -142,7 +142,7 @@ async def chat_completion(
         payload["extra_body"] = {"enable_search": True}
 
     async with httpx.AsyncClient(
-        timeout=httpx.Timeout(10.0, connect=8.0)
+        timeout=httpx.Timeout(30.0, connect=10.0)
     ) as client:
         try:
             resp = await client.post(
