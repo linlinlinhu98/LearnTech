@@ -230,6 +230,688 @@ async def _model_knowledge_search(query: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# 3. Session State (in-memory, per-user tracking for review & mastery)
+# ---------------------------------------------------------------------------
+import time
+
+# Key: f"{user_id}:{chunk_id}" → {"S": float, "last_review": float, "retrievals": int, "correct": int, "incorrect": int}
+_review_state: dict[str, dict] = {}
+
+# Key: f"{user_id}" → {"exam_date": float|None, "focus_course_id": str}
+_session_meta: dict[str, dict] = {}
+
+# Key: f"{user_id}" → set of chunk_ids that are "weak" (连续答错)
+_weak_chunks: dict[str, set[str]] = {}
+
+# Key: f"{user_id}" → list of (chunk_id, difficulty) for current mock exam
+_mock_queue: dict[str, list] = {}
+
+# Key: f"{user_id}" → {"state": str, "results": list, "current_index": int, "llm_used": int}
+# state: "idle" | "active" | "finished"
+_mock_session: dict[str, dict] = {}
+
+# Track consecutive correct answers per weak chunk: f"{user_id}:{chunk_id}" → streak count
+_mock_streak: dict[str, int] = {}
+
+
+def _review_key(user_id: str, chunk_id: str) -> str:
+    return f"{user_id}:{chunk_id}"
+
+
+def _get_review_state(user_id: str, chunk_id: str) -> dict:
+    return _review_state.get(_review_key(user_id, chunk_id), {
+        "S": 1.0,
+        "last_review": time.time(),
+        "retrievals": 0,
+        "correct": 0,
+        "incorrect": 0,
+    })
+
+
+def _save_review_state(user_id: str, chunk_id: str, state: dict) -> None:
+    _review_state[_review_key(user_id, chunk_id)] = state
+
+
+def _set_session_exam(user_id: str, exam_date: str | None) -> None:
+    if user_id not in _session_meta:
+        _session_meta[user_id] = {}
+    if exam_date:
+        try:
+            from datetime import datetime
+            _session_meta[user_id]["exam_date"] = datetime.fromisoformat(exam_date.replace("Z", "+00:00")).timestamp()
+        except Exception:
+            _session_meta[user_id]["exam_date"] = None
+    else:
+        _session_meta[user_id]["exam_date"] = None
+
+
+def _get_exam_urgency(user_id: str) -> float:
+    """Return urgency coefficient: <=7d=3.0, 8-30d=2.0, >30d=1.0"""
+    meta = _session_meta.get(user_id, {})
+    exam_ts = meta.get("exam_date")
+    if not exam_ts:
+        return 1.0
+    now = time.time()
+    days_left = (exam_ts - now) / 86400
+    if days_left <= 0:
+        return 5.0  # exam day or past
+    if days_left <= 7:
+        return 3.0
+    if days_left <= 30:
+        return 2.0
+    return 1.0
+
+
+def _mark_weak(user_id: str, chunk_id: str) -> None:
+    if user_id not in _weak_chunks:
+        _weak_chunks[user_id] = set()
+    _weak_chunks[user_id].add(chunk_id)
+
+
+def _is_weak(user_id: str, chunk_id: str) -> bool:
+    return chunk_id in _weak_chunks.get(user_id, set())
+
+
+def _clear_weak(user_id: str, chunk_id: str) -> None:
+    _weak_chunks.get(user_id, set()).discard(chunk_id)
+
+
+def _fsrs_score(user_id: str, chunk_id: str) -> float:
+    """Return (1-R) * urgency. Higher = more urgent to review."""
+    state = _get_review_state(user_id, chunk_id)
+    S = max(0.1, state["S"])
+    t = (time.time() - state["last_review"]) / 86400  # days
+    R = max(0.0, min(1.0, 1.0 - (1.0 / S) * (1.0 - __import__("math").exp(-t / S))))
+    # Simplified: R ≈ exp(-t/S)
+    import math
+    R = math.exp(-t / S) if S > 0 else 0.0
+    urgency = _get_exam_urgency(user_id)
+    return (1.0 - R) * urgency
+
+
+# ---------------------------------------------------------------------------
+# P0-1: Text Material Ingestion (0 LLM calls)
+# ---------------------------------------------------------------------------
+async def ingest_text(
+    text: str,
+    course_id: str = "",
+    course_title: str = "",
+    user_id: str = "",
+    budget: LlmBudget | None = None,
+) -> str:
+    """Split pasted courseware text into chunks and store in the knowledge base.
+
+    Args:
+        text: raw courseware text (200-10000 chars)
+        course_id: target course identifier (auto-generated if empty)
+        course_title: human-readable title for the course
+        user_id: for ACL (owner of this course)
+        budget: accepted for interface consistency (0 LLM cost)
+
+    Returns a JSON string with the ingestion result.
+    """
+    text = (text or "").strip()
+    if not text:
+        return json.dumps({"success": False, "error": "文本为空"}, ensure_ascii=False)
+
+    if len(text) > 10000:
+        return json.dumps({
+            "success": False,
+            "error": "内容较长，请分多次粘贴，每次不超过 10000 字",
+        }, ensure_ascii=False)
+
+    if len(text) < 200:
+        return json.dumps({
+            "success": False,
+            "error": "内容过短（<200字），不触发导入。请粘贴至少200字的学习材料。",
+        }, ensure_ascii=False)
+
+    # Auto-generate course_id if not provided
+    if not course_id:
+        import uuid
+        course_id = f"imported_{uuid.uuid4().hex[:8]}"
+
+    if not course_title:
+        course_title = "导入课程"
+
+    # Simple chunking: split by double newlines or single newlines for long paragraphs
+    # Target 200-400 chars per chunk
+    chunks_data: list[dict] = []
+    paragraphs = text.split("\n\n")
+    current_chunk = ""
+    chunk_idx = 0
+
+    for para in paragraphs:
+        para = para.strip()
+        if not para:
+            continue
+        # If single paragraph is very long, split by sentences (approx 200 char per unit)
+        if len(para) > 400 and "。" in para:
+            sentences = para.split("。")
+            for sent in sentences:
+                sent = sent.strip()
+                if not sent:
+                    continue
+                if len(current_chunk) + len(sent) + 1 <= 400:
+                    current_chunk += ("。" if current_chunk else "") + sent
+                else:
+                    if current_chunk:
+                        chunks_data.append({"text": current_chunk + "。"})
+                        chunk_idx += 1
+                    current_chunk = sent
+        else:
+            if len(current_chunk) + len(para) + 2 <= 400:
+                current_chunk += ("\n\n" if current_chunk else "") + para
+            else:
+                if current_chunk:
+                    chunks_data.append({"text": current_chunk})
+                    chunk_idx += 1
+                current_chunk = para
+
+    if current_chunk:
+        chunks_data.append({"text": current_chunk})
+        chunk_idx += 1
+
+    # Build LessonChunk objects
+    try:
+        from .knowledge_store import LessonChunk, embedding_provider, knowledge_store
+    except ImportError:
+        from knowledge_store import LessonChunk, embedding_provider, knowledge_store
+
+    chunks, texts = [], []
+    for i, cd in enumerate(chunks_data):
+        chunk_text = cd["text"]
+        section_id = f"S{i+1:03d}"
+        lesson_id = f"L001"  # imported text goes into a single lesson
+        chunks.append(LessonChunk(
+            id=f"{lesson_id}-{section_id}",
+            lesson_id=lesson_id,
+            lesson_title=f"第{i+1}节",
+            section_id=section_id,
+            text=chunk_text,
+            course_id=course_id,
+            course_title=course_title,
+        ))
+        texts.append(chunk_text)
+
+    # Embed
+    try:
+        embeddings = embedding_provider.embed(texts)
+    except Exception:
+        embeddings = embedding_provider._noop_embed(texts)
+
+    knowledge_store.add_chunks(chunks, embeddings)
+
+    # Record retrieval counts for mastery (all start at 0)
+    for chunk in chunks:
+        key = _review_key(user_id, chunk.id)
+        if key not in _review_state:
+            _review_state[key] = {
+                "S": 1.0,
+                "last_review": time.time(),
+                "retrievals": 0,
+                "correct": 0,
+                "incorrect": 0,
+            }
+
+    return json.dumps({
+        "success": True,
+        "course_id": course_id,
+        "course_title": course_title,
+        "chunks_ingested": len(chunks),
+        "note": f"已整理 {len(chunks)} 个知识块，存入课程「{course_title}」。现在可以问我任何相关问题。",
+    }, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
+# P0-2: Review Schedule (0 LLM calls — pure calculation)
+# ---------------------------------------------------------------------------
+async def schedule_review(
+    exam_date: str = "",
+    course_id: str = "",
+    user_id: str = "",
+    top_k: int = 5,
+    budget: LlmBudget | None = None,
+) -> str:
+    """Calculate FSRS-based review priorities for a course.
+
+    R = exp(-t/S), urgency = (1-R) * exam_urgency_coefficient.
+    Returns top_k chunks ranked by urgency descending.
+    """
+    _set_session_exam(user_id, exam_date or None)
+
+    try:
+        from .knowledge_store import knowledge_store
+    except ImportError:
+        from knowledge_store import knowledge_store
+
+    # Collect chunks for this course
+    all_chunks = []
+    for chunk, _ in knowledge_store._chunks:
+        if course_id and chunk.course_id and chunk.course_id != course_id:
+            continue
+        all_chunks.append(chunk)
+
+    if not all_chunks:
+        return json.dumps({
+            "results": [],
+            "note": "知识库为空：请先导入学习材料或生成课程，我才能计算复习计划。",
+        }, ensure_ascii=False)
+
+    # Score each chunk
+    scored = []
+    for chunk in all_chunks:
+        score = _fsrs_score(user_id, chunk.id)
+        state = _get_review_state(user_id, chunk.id)
+        import math
+        R = math.exp(-((time.time() - state["last_review"]) / 86400) / max(0.1, state["S"]))
+        retrievability = max(0.0, min(1.0, R))
+        scored.append({
+            "chunk_id": chunk.id,
+            "lesson_id": chunk.lesson_id,
+            "lesson_title": chunk.lesson_title,
+            "section_id": chunk.section_id,
+            "course_title": chunk.course_title,
+            "retrievability": round(retrievability * 100, 1),
+            "urgency_score": round(score, 3),
+            "S": round(state["S"], 2),
+            "correct": state["correct"],
+            "incorrect": state["incorrect"],
+            "is_weak": _is_weak(user_id, chunk.id),
+        })
+
+    # Sort by urgency descending
+    scored.sort(key=lambda x: x["urgency_score"], reverse=True)
+
+    # Check if exam is today
+    urgency_now = _get_exam_urgency(user_id)
+    if urgency_now >= 5.0:
+        return json.dumps({
+            "results": [],
+            "exam_today": True,
+            "note": "考试当天！建议直接开始模考来检验掌握情况。回复「开始模考」。",
+        }, ensure_ascii=False)
+
+    top = scored[:top_k]
+    return json.dumps({
+        "results": top,
+        "exam_urgency": urgency_now,
+        "exam_date": exam_date,
+        "total_chunks": len(all_chunks),
+    }, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
+# P1-2: Record Quiz Answer (0 LLM calls) — update FSRS state after student answers
+# ---------------------------------------------------------------------------
+async def record_answer(
+    chunk_id: str = "",
+    user_id: str = "",
+    correct: bool = False,
+    budget: LlmBudget | None = None,
+) -> str:
+    """Record a quiz result and update FSRS stability S for the chunk.
+
+    Called by the dispatcher after generate_quiz when the student answers.
+    This updates S in the review state:
+      correct=True  → S += 0.2 (stability improves)
+      correct=False → S -= 0.15 (stability drops)
+    Also manages weak-chunk tracking for mock exam priority.
+    """
+    if not chunk_id or not user_id:
+        return json.dumps({"success": False, "error": "chunk_id 和 user_id 必填"}, ensure_ascii=False)
+
+    state = _get_review_state(user_id, chunk_id)
+    if correct:
+        state["correct"] = state.get("correct", 0) + 1
+        state["S"] = state.get("S", 1.0) + 0.2
+        # Clear weak if streak >= 2
+        streak_key = f"{user_id}:{chunk_id}"
+        _mock_streak[streak_key] = _mock_streak.get(streak_key, 0) + 1
+        if _mock_streak.get(streak_key, 0) >= 2:
+            _clear_weak(user_id, chunk_id)
+    else:
+        state["incorrect"] = state.get("incorrect", 0) + 1
+        state["S"] = max(0.1, state.get("S", 1.0) - 0.15)
+        # Mark as weak for mock exam priority
+        _mark_weak(user_id, chunk_id)
+        _mock_streak.pop(f"{user_id}:{chunk_id}", None)
+
+    state["last_review"] = time.time()
+    _save_review_state(user_id, chunk_id, state)
+
+    return json.dumps({
+        "success": True,
+        "chunk_id": chunk_id,
+        "correct": correct,
+        "new_S": round(state["S"], 2),
+        "is_weak": _is_weak(user_id, chunk_id),
+    }, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
+# P1-1: Mastery Report (0 LLM calls)
+# ---------------------------------------------------------------------------
+async def mastery_report(
+    course_id: str = "",
+    user_id: str = "",
+    budget: LlmBudget | None = None,
+) -> str:
+    """Generate a text mastery report for a course based on retrieval and quiz records."""
+    try:
+        from .knowledge_store import knowledge_store
+    except ImportError:
+        from knowledge_store import knowledge_store
+
+    all_chunks = []
+    for chunk, _ in knowledge_store._chunks:
+        if course_id and chunk.course_id and chunk.course_id != course_id:
+            continue
+        all_chunks.append(chunk)
+
+    if not all_chunks:
+        return json.dumps({
+            "report": "知识库为空：请先导入材料或生成课程，再查询掌握度。",
+        }, ensure_ascii=False)
+
+    # Group by lesson
+    by_lesson: dict[str, list] = {}
+    for chunk in all_chunks:
+        lid = chunk.lesson_id or "unknown"
+        if lid not in by_lesson:
+            by_lesson[lid] = {
+                "lesson_title": chunk.lesson_title or lid,
+                "chunks": [],
+            }
+        state = _get_review_state(user_id, chunk.id)
+        retrievability = 0.0
+        try:
+            import math
+            t = (time.time() - state["last_review"]) / 86400
+            retrievability = math.exp(-t / max(0.1, state["S"]))
+        except Exception:
+            pass
+
+        mastery = min(100, max(0,
+            state["retrievals"] * 10 +
+            state["correct"] * 15 +
+            5 if (state["correct"] > 0 and state["incorrect"] == 0) else 0 -
+            state["incorrect"] * 10
+        ))
+        by_lesson[lid]["chunks"].append({
+            "chunk_id": chunk.id,
+            "section_id": chunk.section_id,
+            "mastery_score": max(0, mastery),
+            "retrievals": state["retrievals"],
+            "correct": state["correct"],
+            "incorrect": state["incorrect"],
+            "retrievability": round(retrievability * 100, 1),
+            "is_weak": _is_weak(user_id, chunk.id),
+        })
+
+    # Compute per-lesson mastery
+    lesson_summaries = []
+    for lid, data in by_lesson.items():
+        chunks = data["chunks"]
+        avg_mastery = sum(c["mastery_score"] for c in chunks) / len(chunks) if chunks else 0
+        total_correct = sum(c["correct"] for c in chunks)
+        total_incorrect = sum(c["incorrect"] for c in chunks)
+        total_retrievals = sum(c["retrievals"] for c in chunks)
+        never_interacted = sum(1 for c in chunks if c["retrievals"] == 0 and c["correct"] == 0 and c["incorrect"] == 0)
+
+        if avg_mastery >= 75:
+            level = "high"
+        elif avg_mastery >= 45:
+            level = "mid"
+        else:
+            level = "low"
+
+        lesson_summaries.append({
+            "lesson_id": lid,
+            "lesson_title": data["lesson_title"],
+            "mastery_score": round(avg_mastery, 1),
+            "level": level,
+            "total_correct": total_correct,
+            "total_incorrect": total_incorrect,
+            "total_retrievals": total_retrievals,
+            "never_interacted": never_interacted,
+            "chunks": chunks,
+        })
+
+    lesson_summaries.sort(key=lambda x: x["mastery_score"])
+
+    # Overall
+    overall = sum(l["mastery_score"] for l in lesson_summaries) / len(lesson_summaries) if lesson_summaries else 0
+    weak_lessons = [l for l in lesson_summaries if l["mastery_score"] < 45]
+    never_learning = [l for l in lesson_summaries if l["never_interacted"] == len(l["chunks"])]
+
+    # Build text report
+    lines = [f"课程掌握度报告："]
+    lines.append(f"总体掌握度：{overall:.0f}%")
+    lines.append("")
+    for l in lesson_summaries:
+        lines.append(f"{l['lesson_title']} — {l['mastery_score']:.0f}% "
+                     f"(检索{l['total_retrievals']}次/答对{l['total_correct']}题/答错{l['total_incorrect']}题)")
+    lines.append("")
+    if weak_lessons:
+        lines.append("薄弱章节：")
+        for l in weak_lessons:
+            lines.append(f"  · {l['lesson_title']} ({l['mastery_score']:.0f}%)")
+        lines.append("")
+    if never_learning:
+        lines.append("从未互动章节（需重点学习）：")
+        for l in never_learning:
+            lines.append(f"  · {l['lesson_title']}")
+        lines.append("")
+    lines.append("建议：回复「讲讲[章节名]」开始学习，或「出几道[章节名]的题」检验掌握。")
+
+    return json.dumps({
+        "report": "\n".join(lines),
+        "lesson_summaries": lesson_summaries,
+        "overall_mastery": round(overall, 1),
+        "weak_lessons": [l["lesson_id"] for l in weak_lessons],
+        "never_learning": [l["lesson_id"] for l in never_learning],
+    }, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
+# P1-2: Adaptive Mock Exam (1 LLM call per question)
+# ---------------------------------------------------------------------------
+async def mock_exam(
+    action: str = "start",
+    course_id: str = "",
+    user_id: str = "",
+    budget: LlmBudget | None = None,
+) -> str:
+    """Adaptive mock exam tool.
+
+    Actions:
+      start  — initialize exam session, pick topics (0 LLM calls)
+      answer — record student's answer and return next question or summary (1 LLM call)
+    """
+    if action == "start":
+        return _mock_start(course_id, user_id)
+
+    if action == "answer":
+        return await _mock_answer(course_id, user_id, budget)
+
+    return json.dumps({"error": f"未知 action: {action}"}, ensure_ascii=False)
+
+
+def _mock_start(course_id: str, user_id: str) -> str:
+    """Pick topics and initialize exam session. 0 LLM calls."""
+    try:
+        from .knowledge_store import knowledge_store
+    except ImportError:
+        from knowledge_store import knowledge_store
+
+    all_chunks = []
+    for chunk, _ in knowledge_store._chunks:
+        if course_id and chunk.course_id and chunk.course_id != course_id:
+            continue
+        all_chunks.append(chunk)
+
+    if not all_chunks:
+        return json.dumps({
+            "error": "知识库为空，请先导入材料或生成课程。",
+        }, ensure_ascii=False)
+
+    # Pick up to 3 chunks from different lessons for variety
+    lesson_groups: dict[str, list] = {}
+    for chunk in all_chunks:
+        lid = chunk.lesson_id or "unknown"
+        if lid not in lesson_groups:
+            lesson_groups[lid] = []
+        lesson_groups[lid].append(chunk)
+
+    # Select up to 3 lessons
+    selected: list[dict] = []
+    for lid, chunks in list(lesson_groups.items())[:3]:
+        import random
+        ch = random.choice(chunks)
+        selected.append({
+            "chunk_id": ch.id,
+            "lesson_id": lid,
+            "lesson_title": ch.lesson_title,
+            "section_id": ch.section_id,
+            "course_title": ch.course_title,
+        })
+
+    # Prioritize weak chunks
+    if user_id:
+        weak_ids = _weak_chunks.get(user_id, set())
+        prioritized = []
+        for s in selected:
+            if s["chunk_id"] in weak_ids:
+                prioritized.append(s)
+        prioritized.extend([s for s in selected if s["chunk_id"] not in weak_ids])
+        selected = prioritized[:3]
+
+    _mock_session[user_id] = {
+        "state": "active",
+        "topics": selected,
+        "results": [],  # list of {chunk_id, correct, llm_used}
+        "current_index": 0,
+        "llm_used": 0,
+    }
+
+    return json.dumps({
+        "started": True,
+        "topics": [
+            {"lesson_title": s["lesson_title"], "course_title": s["course_title"]}
+            for s in selected
+        ],
+        "total": len(selected),
+        "note": f"模考开始，共 {len(selected)} 道题。答对会提高下次同类题难度，答错会自动降低难度并讲解。",
+    }, ensure_ascii=False)
+
+
+async def _mock_answer(course_id: str, user_id: str, budget: LlmBudget | None) -> str:
+    """Process student's answer feedback and advance exam. 1 LLM call if calling generate_quiz."""
+    if not budget is None and not _charge(budget):
+        return json.dumps({
+            "finished": True,
+            "error": "LLM 预算已耗尽，无法继续出题。",
+        }, ensure_ascii=False)
+
+    session = _mock_session.get(user_id, {})
+    if session.get("state") != "active":
+        return json.dumps({
+            "error": "没有进行中的模考，请先说「开始模考」。",
+        }, ensure_ascii=False)
+
+    topics = session.get("topics", [])
+    idx = session.get("current_index", 0)
+    results = session.get("results", [])
+
+    if idx >= len(topics):
+        return _mock_summary(user_id, session)
+
+    topic = topics[idx]
+    chunk_id = topic["chunk_id"]
+
+    # Move to next
+    session["current_index"] = idx + 1
+    session["llm_used"] = session.get("llm_used", 0) + 1
+
+    # Update weak chunk streak
+    streak_key = f"{user_id}:{chunk_id}"
+    prev_streak = _mock_streak.get(streak_key, 0)
+
+    # After answering, advance; if session ended naturally (user called answer after last question)
+    # we compute correct/incorrect from previous result if available
+    if idx >= len(topics):
+        return _mock_summary(user_id, session)
+
+    # Return next topic info for the LLM to generate a question
+    # The dispatcher will call generate_quiz internally after seeing this
+    return json.dumps({
+        "next_topic": {
+            "lesson_title": topic["lesson_title"],
+            "section_id": topic["section_id"],
+            "course_title": topic["course_title"],
+            "chunk_id": chunk_id,
+        },
+        "progress": f"{idx + 1}/{len(topics)}",
+        "llm_remaining": budget.max_calls - budget.used if budget else "unknown",
+        "note": f"第 {idx+1} 题，请针对「{topic['lesson_title']}」出一道练习题。",
+    }, ensure_ascii=False)
+
+
+def _mock_summary(user_id: str, session: dict) -> str:
+    """Generate mock exam summary. 0 LLM calls."""
+    results = session.get("results", [])
+    topics = session.get("topics", [])
+
+    session["state"] = "finished"
+
+    if not results:
+        # No results recorded yet — just mark finished
+        return json.dumps({
+            "finished": True,
+            "total": len(topics),
+            "correct": 0,
+            "incorrect": 0,
+            "note": "模考已结束，未记录答题结果。",
+        }, ensure_ascii=False)
+
+    correct = sum(1 for r in results if r.get("correct"))
+    incorrect = len(results) - correct
+
+    # Identify weak topics
+    weak_ids = set(r["chunk_id"] for r in results if not r.get("correct"))
+
+    # Update global weak tracking
+    for chunk_id in weak_ids:
+        _mark_weak(user_id, chunk_id)
+
+    # Clear streaks for correct ones
+    for r in results:
+        if r.get("correct"):
+            _mock_streak.pop(f"{user_id}:{r['chunk_id']}", None)
+
+    lines = []
+    lines.append(f"模考小结（共 {len(topics)} 题）：")
+    lines.append(f"答对 {correct} / 答错 {incorrect}")
+    if weak_ids:
+        weak_titles = [t["lesson_title"] for t in topics if t["chunk_id"] in weak_ids]
+        lines.append("")
+        lines.append(f"薄弱章节：{', '.join(weak_titles)}")
+        lines.append("下次对话中我会优先问你这些章节的题。")
+    else:
+        lines.append("表现良好！所有章节都已掌握。")
+
+    return json.dumps({
+        "finished": True,
+        "total": len(topics),
+        "correct": correct,
+        "incorrect": incorrect,
+        "weak_chunk_ids": list(weak_ids),
+        "report": "\n".join(lines),
+    }, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
 # 3. Code Runner (0 LLM calls — sandboxed subprocess)
 # ---------------------------------------------------------------------------
 async def run_code(code: str, budget: LlmBudget | None = None) -> str:
@@ -319,4 +1001,14 @@ def build_tool_registry() -> dict[str, Any]:
         "run_code": run_code,
         "generate_quiz": generate_quiz,
         "explain_concept": explain_concept,
+        # P0-1: 对话式材料导入
+        "ingest_text": ingest_text,
+        # P0-2: 复习调度
+        "schedule_review": schedule_review,
+        # P1-1: 掌握度报告
+        "mastery_report": mastery_report,
+        # P1-2: 自适应模考
+        "mock_exam": mock_exam,
+        # P1-2: 答题记录（答题后更新FSRS状态）
+        "record_answer": record_answer,
     }

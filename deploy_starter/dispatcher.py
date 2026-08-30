@@ -218,6 +218,42 @@ class TutorDispatcher:
                 "concept": step.get("concept") or question,
                 "level": step.get("level") or "beginner",
             }
+        # P0-1: 材料导入
+        if name == "ingest_text":
+            return {
+                "text": step.get("text") or question,
+                "course_id": step.get("course_id") or "",
+                "course_title": step.get("course_title") or "",
+                "user_id": user_id,
+            }
+        # P0-2: 复习调度
+        if name == "schedule_review":
+            return {
+                "exam_date": step.get("exam_date") or "",
+                "course_id": step.get("course_id") or course_id,
+                "user_id": user_id,
+                "top_k": int(step.get("top_k") or 5),
+            }
+        # P1-1: 掌握度报告
+        if name == "mastery_report":
+            return {
+                "course_id": step.get("course_id") or course_id,
+                "user_id": user_id,
+            }
+        # P1-2: 自适应模考
+        if name == "mock_exam":
+            return {
+                "action": step.get("action") or "start",
+                "course_id": step.get("course_id") or course_id,
+                "user_id": user_id,
+            }
+        # P1-2: 答题记录
+        if name == "record_answer":
+            return {
+                "chunk_id": step.get("chunk_id") or "",
+                "user_id": user_id,
+                "correct": bool(step.get("correct")),
+            }
         return {}
 
     @staticmethod
