@@ -34,6 +34,7 @@ try:
         seed_demo_data,
     )
     from .dispatcher import TutorDispatcher
+    from . import tutor_core as _tutor_core_mod
     from .tutor_core import build_tool_registry
 except ImportError:  # Direct execution / local tests
     import authoring as _authoring_mod
@@ -45,6 +46,7 @@ except ImportError:  # Direct execution / local tests
         seed_demo_data,
     )
     from dispatcher import TutorDispatcher
+    import tutor_core as _tutor_core_mod
     from tutor_core import build_tool_registry
 
 
@@ -330,6 +332,94 @@ async def knowledge_ingest(request: Request):
 def list_courses():
     """List all courses stored in the knowledge base."""
     return _ok(data={"courses": knowledge_store.list_courses()})
+
+
+# ============================================================
+# P0-2: Review Schedule
+# ============================================================
+@app.post("/api/v1/review/schedule")
+async def review_schedule(request: Request):
+    """FSRS-based review scheduling. Exam date optional."""
+    body = await request.json()
+    result = await _tutor_core_mod.schedule_review(
+        exam_date=str(body.get("exam_date") or ""),
+        course_id=str(body.get("course_id") or ""),
+        user_id=str(body.get("user_id") or ""),
+        top_k=int(body.get("top_k") or 5),
+    )
+    import json as _json
+    data = _json.loads(result)
+    return _ok(data=data)
+
+
+# ============================================================
+# P1-1: Mastery Report
+# ============================================================
+@app.post("/api/v1/mastery/report")
+async def mastery_report(request: Request):
+    """Generate mastery report for a course."""
+    body = await request.json()
+    result = await _tutor_core_mod.mastery_report(
+        course_id=str(body.get("course_id") or ""),
+        user_id=str(body.get("user_id") or ""),
+    )
+    import json as _json
+    data = _json.loads(result)
+    return _ok(data=data)
+
+
+# ============================================================
+# P1-2: Adaptive Mock Exam
+# ============================================================
+@app.post("/api/v1/mock/start")
+async def mock_start(request: Request):
+    """Start a new mock exam session."""
+    body = await request.json()
+    result = await _tutor_core_mod.mock_exam(
+        action="start",
+        course_id=str(body.get("course_id") or ""),
+        user_id=str(body.get("user_id") or ""),
+    )
+    import json as _json
+    data = _json.loads(result)
+    return _ok(data=data)
+
+
+@app.post("/api/v1/mock/answer")
+async def mock_answer(request: Request):
+    """Process an answer in an active mock exam (returns next question or summary)."""
+    body = await request.json()
+    # record_answer needs a budget — use a dummy one for this REST endpoint
+    from .llm_utils import LlmBudget
+    budget = LlmBudget(max_calls=8)
+    result = await _tutor_core_mod.mock_exam(
+        action="answer",
+        course_id=str(body.get("course_id") or ""),
+        user_id=str(body.get("user_id") or ""),
+        budget=budget,
+    )
+    import json as _json
+    data = _json.loads(result)
+    return _ok(data=data)
+
+
+@app.post("/api/v1/mock/record")
+async def mock_record(request: Request):
+    """Record a student's answer to a quiz question and update FSRS state."""
+    body = await request.json()
+    chunk_id = str(body.get("chunk_id") or "")
+    user_id = str(body.get("user_id") or "")
+    correct = bool(body.get("correct", False))
+    if not chunk_id or not user_id:
+        return JSONResponse(status_code=400, content={"error": "chunk_id and user_id are required"})
+    result = await _tutor_core_mod.record_answer(
+        chunk_id=chunk_id,
+        user_id=user_id,
+        correct=correct,
+    )
+    import json as _json
+    data = _json.loads(result)
+    return _ok(data=data)
 
 
 # ============================================================
