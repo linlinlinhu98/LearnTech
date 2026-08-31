@@ -826,17 +826,19 @@ async def _grade_answer(
 
     # For fill_blank and short_answer, use LLM to judge
     system_msg = (
-        "你是一位耐心的编程助教。请判断学生回答并在最后给出判定结果。\n"
+        "你是一位耐心的编程助教。请判断学生回答并给出详细点评。\n"
         "【判断标准】\n"
         "填空题：学生填的内容是否与标准答案语义一致或等效（大小写/术语差异可接受） → 判定：正确\n"
         "简答题：学生是否理解核心概念，解释基本正确（允许合理误差，不要求完美） → 判定：正确\n"
         "学生回答为空、只写'不知道'、明显敷衍 → 判定：错误\n"
         "学生回答与正确答案主题完全无关 → 判定：错误\n"
-        "【输出要求】\n"
-        "先给出详细点评（必须包含：判断依据、知识点讲解、标准答案），然后在最后一行输出：\n"
-        "判定结果：正确  或  判定结果：错误\n"
-        "注意：点评内容要有实质性讲解，correct=false时必须给出标准答案。\n"
-        "总字数不少于150字。"
+        "【输出格式 - 严格按此顺序输出4部分，每部分独立成段】\n"
+        "第一段：判断依据（说明为什么判定正确或错误，1-2句）\n"
+        "第二段：知识点讲解（结合课程内容详细讲解本题涉及的核心概念，4-6句）\n"
+        "第三段：标准答案（直接给出本题的标准答案或参考答案，1-2句）\n"
+        "第四段：判定结果：正确  或  判定结果：错误\n"
+        "【重要】第三段标准答案必须填写，即使学生回答正确也要写。\n"
+        "每部分都要有实质内容，不要省略。"
     )
     chunk_section = f"【课程内容】\n{chunk_text}\n\n" if chunk_text else ""
     user_msg = (
@@ -851,19 +853,16 @@ async def _grade_answer(
         from llm_utils import chat_completion
         raw = await chat_completion(
             [{"role": "system", "content": system_msg}, {"role": "user", "content": user_msg}],
-            temperature=0.1,
+            temperature=0.2,
             max_tokens=2048,
         )
-        # Parse plain text response: extract correct from "判定结果：正确/错误"
         text = raw.strip()
-        is_correct = "判定结果：正确" in text
-        # Remove the final judgment line from feedback
-        feedback_lines = []
-        for line in text.splitlines():
-            if "判定结果：" in line:
-                continue
-            feedback_lines.append(line)
-        feedback = "\n".join(feedback_lines).strip()
+        # Parse: last line contains "判定结果：正确" or "判定结果：错误"
+        lines = text.splitlines()
+        is_correct = any("判定结果：正确" in l for l in lines)
+        # Feedback = everything except the last judgment line
+        feedback_parts = [l for l in lines if "判定结果：" not in l]
+        feedback = "\n".join(feedback_parts).strip()
         return {"correct": is_correct, "feedback": feedback[:1000]}
     except Exception:
         pass
