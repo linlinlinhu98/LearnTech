@@ -826,31 +826,36 @@ async def _grade_answer(
 
     # For fill_blank and short_answer, use LLM to judge
     system_msg = (
-        "你是一位耐心的编程助教，对学生作业给出详细、有帮助的点评。\n"
-        "填空题：学生填的内容是否与标准答案语义一致或等效（大小写/术语差异可接受）。\n"
-        "简答题：学生是否理解了核心概念，解释是否基本正确（不需要完美，允许合理误差）。\n"
-        "回答为空或明显敷衍 → correct=false，先批评这种行为，然后结合课程内容讲解正确答案并给出标准答案。\n"
-        "回答正确 → feedback肯定优点并复述关键知识点。\n"
-        "回答错误 → feedback先指出错误点，然后结合课程内容清晰讲解正确答案，最后给出标准答案。\n"
-        "只输出JSON（无Markdown）：\n"
-        '{"correct": true或false, "feedback": "详细点评，150字以内"}'
+        "你是一位严格的编程助教。请根据以下规则判断学生回答并给出点评。\n"
+        "【判断标准】\n"
+        "填空题：学生填的内容是否与标准答案语义一致或等效（大小写/术语差异可接受） → correct=true\n"
+        "简答题：学生是否理解核心概念，解释基本正确（允许合理误差，不要求完美） → correct=true\n"
+        "学生回答为空、只写'不知道'、明显敷衍 → correct=false\n"
+        "学生回答与正确答案主题无关 → correct=false\n"
+        "【输出格式】必须严格遵循以下JSON格式，不要输出任何其他内容：\n"
+        '{"correct": true或false, "feedback": "点评内容"}'\n"
+        "【点评内容要求】\n"
+        "correct=true时：先肯定优点（1句），再复述本题目对应的关键知识点（2-3句），总字数80-120字。\n"
+        "correct=false时：先指出错误或问题（1句），然后结合课程内容详细讲解本题涉及的核心知识点（3-5句），最后给出本题的标准答案（2-3句），总字数150-250字。\n"
+        "不要省略任何部分，不要使用省略号。"
     )
-    chunk_section = f"课程内容：\n{chunk_text}\n\n" if chunk_text else ""
+    chunk_section = f"【课程内容】\n{chunk_text}\n\n" if chunk_text else ""
     user_msg = (
         f"{chunk_section}"
-        f"题目：{question}\n"
-        f"参考标准答案：{correct_answer or '（无固定答案，请根据课程内容判断）'}\n"
-        f"学生回答：{answer_text}\n"
-        f"题型：{question_type}\n"
-        "请详细点评学生回答。"
+        f"【题目】{question}\n"
+        f"【题型】{question_type}\n"
+        f"【参考标准答案】{correct_answer or '（无固定标准答案，请根据课程内容判断）'}\n"
+        f"【学生回答】{answer_text}\n"
+        "请严格按照上述格式输出JSON。"
     )
 
     try:
         from llm_utils import chat_completion_json
-        result = await chat_completion_json([
-            {"role": "system", "content": system_msg},
-            {"role": "user", "content": user_msg},
-        ])
+        result = await chat_completion_json(
+            [{"role": "system", "content": system_msg}, {"role": "user", "content": user_msg}],
+            temperature=0.1,
+            max_tokens=2048,
+        )
         if isinstance(result, dict):
             return {
                 "correct": bool(result.get("correct")),
