@@ -866,8 +866,9 @@ function skipQuestion() {
       renderMockQuestions();
       return;
     }
-    pendingQuestion = data;
+    // Navigate to next question and prepare it for grading
     currentQuestion = data;
+    pendingQuestion = data;
     renderMockQuestions();
   }).catch(e => {
     mockBusy = false;
