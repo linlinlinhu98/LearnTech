@@ -78,7 +78,7 @@ class TutorDispatcher:
             # 不超过 max_llm_calls。asyncio.gather 按传入顺序返回结果，
             # 故 evidence / [参考N] 编号保持与规划器给出的 steps 顺序一致。
             results = await asyncio.gather(
-                *(self._run_step(step, question, course_id, budget) for step in steps)
+                *(self._run_step(step, question, course_id, user_id, budget) for step in steps)
             )
             evidence.extend(r for r in results if r is not None)
 
@@ -152,6 +152,7 @@ class TutorDispatcher:
         step: dict[str, Any],
         question: str,
         course_id: str,
+        user_id: str,
         budget: LlmBudget,
     ) -> str | None:
         name = str(step.get("sub_agent") or "").strip()
@@ -159,7 +160,7 @@ class TutorDispatcher:
         if tool is None:
             return json.dumps({"error": f"未知子代理: {name}"}, ensure_ascii=False)
 
-        kwargs = self._build_tool_args(name, step, question, course_id)
+        kwargs = self._build_tool_args(name, step, question, course_id, user_id)
         kwargs["budget"] = budget
 
         try:
@@ -175,12 +176,13 @@ class TutorDispatcher:
         step: dict[str, Any],
         question: str,
         course_id: str,
+        user_id: str,
         budget: LlmBudget,
     ) -> dict[str, str] | None:
         """Execute one planned step and wrap it as an evidence entry (or None)."""
         if not isinstance(step, dict):
             return None
-        output = await self._execute(step, question, course_id, budget)
+        output = await self._execute(step, question, course_id, user_id, budget)
         if output is None:
             return None
         return {
@@ -197,6 +199,7 @@ class TutorDispatcher:
         step: dict[str, Any],
         question: str,
         course_id: str,
+        user_id: str,
     ) -> dict[str, Any]:
         if name == "retrieve":
             return {

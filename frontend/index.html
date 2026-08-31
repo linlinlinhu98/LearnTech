@@ -1,0 +1,886 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lumen-Bailian 学习助手</title>
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+<style>
+:root {
+  --bg: #f4f6fb;
+  --panel: #ffffff;
+  --ink: #1a2233;
+  --muted: #6b7280;
+  --rule: #e5e7eb;
+  --accent: #4f46e5;
+  --accent2: #06b6d4;
+  --accent-soft: rgba(79,70,229,0.08);
+  --success: #10b981;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+  --radius: 12px;
+  --radius-sm: 8px;
+  --shadow: 0 2px 8px rgba(0,0,0,0.06);
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: var(--bg);
+  color: var(--ink);
+  font-size: 15px;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* ── Layout ── */
+.layout { display: flex; height: 100vh; }
+
+.sidebar {
+  width: 220px;
+  background: var(--panel);
+  border-right: 1px solid var(--rule);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+
+.sidebar-header { padding: 20px 16px 12px; border-bottom: 1px solid var(--rule); }
+.sidebar-header .logo { font-size: 16px; font-weight: 700; color: var(--accent); letter-spacing: -0.01em; }
+.sidebar-header .sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+.sidebar nav { flex: 1; padding: 12px 8px; overflow-y: auto; }
+
+.nav-item {
+  display: flex; align-items: center; gap: 10px; padding: 9px 10px;
+  border-radius: var(--radius-sm); cursor: pointer; font-size: 14px;
+  color: var(--muted); transition: all 0.15s; margin-bottom: 2px;
+  border: none; background: none; width: 100%; text-align: left;
+}
+.nav-item:hover { background: var(--bg); color: var(--ink); }
+.nav-item.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.nav-item .icon { width: 18px; height: 18px; flex-shrink: 0; }
+
+.sidebar-footer { padding: 8px; border-top: 1px solid var(--rule); }
+.sidebar-footer .nav-item { font-size: 12px; color: var(--muted); }
+
+/* ── Main ── */
+.main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+.topbar {
+  background: var(--panel); border-bottom: 1px solid var(--rule);
+  padding: 0 20px; height: 52px; display: flex; align-items: center; gap: 16px; flex-shrink: 0;
+}
+.topbar-title { font-weight: 600; font-size: 15px; }
+.topbar-status { font-size: 12px; color: var(--muted); margin-left: auto; }
+
+.btn {
+  padding: 6px 14px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 600;
+  cursor: pointer; border: none; transition: all 0.15s; font-family: inherit;
+}
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-primary:hover { background: #4338ca; }
+.btn-secondary { background: var(--bg); color: var(--accent); border: 1px solid var(--accent); }
+.btn-secondary:hover { background: var(--accent-soft); }
+.btn-small { padding: 3px 10px; font-size: 12px; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ── Chat ── */
+.chat-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.chat-messages { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 12px; }
+
+.chat-msg { display: flex; gap: 10px; max-width: 80%; }
+.chat-msg.user { align-self: flex-end; flex-direction: row-reverse; }
+
+.chat-avatar {
+  width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 700; flex-shrink: 0;
+}
+.chat-msg.user .chat-avatar { background: var(--accent); color: #fff; }
+.chat-msg.agent .chat-avatar { background: var(--accent-soft); color: var(--accent); }
+
+.chat-bubble {
+  max-width: 100%; padding: 10px 14px; border-radius: var(--radius); font-size: 14px;
+  line-height: 1.65; white-space: pre-wrap; word-break: break-word;
+}
+.chat-msg.user .chat-bubble { background: var(--accent); color: #fff; border-radius: var(--radius) 4px var(--radius) var(--radius); }
+.chat-msg.agent .chat-bubble { background: var(--panel); border: 1px solid var(--rule); border-radius: 4px var(--radius) var(--radius) var(--radius); box-shadow: var(--shadow); }
+
+.ref-tag { display: inline-block; font-size: 11px; background: rgba(16,185,129,0.1); color: var(--success); padding: 1px 6px; border-radius: 10px; margin: 1px 3px; }
+
+.mastery-tag { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 10px; margin: 1px 3px; }
+.mastery-tag.high { background: rgba(16,185,129,0.12); color: var(--success); }
+.mastery-tag.mid  { background: rgba(245,158,11,0.12); color: var(--warning); }
+.mastery-tag.low  { background: rgba(239,68,68,0.12); color: var(--danger); }
+
+.chat-input-area {
+  padding: 12px 16px; background: var(--panel); border-top: 1px solid var(--rule); display: flex; gap: 8px; align-items: flex-end;
+}
+.chat-input {
+  flex: 1; padding: 9px 14px; border: 1px solid var(--rule); border-radius: var(--radius-sm);
+  font-size: 14px; font-family: inherit; resize: none; outline: none;
+  min-height: 42px; max-height: 120px; line-height: 1.5; transition: border-color 0.15s;
+}
+.chat-input:focus { border-color: var(--accent); }
+
+/* ── Right Panel ── */
+.right-panel { width: 300px; background: var(--panel); border-left: 1px solid var(--rule); display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0; }
+.panel-section { padding: 14px 16px; border-bottom: 1px solid var(--rule); }
+.panel-section.flex-1 { flex: 1; overflow-y: auto; display: flex; flex-direction: column; }
+.panel-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin-bottom: 10px; }
+
+/* ── Material Import ── */
+.material-tabs { display: flex; gap: 4px; margin-bottom: 10px; }
+.tab-btn {
+  flex: 1; padding: 5px 8px; border: 1px solid var(--rule); border-radius: 6px;
+  background: none; cursor: pointer; font-size: 12px; font-family: inherit;
+  color: var(--muted); transition: all 0.15s; display: flex; align-items: center; justify-content: center; gap: 5px;
+}
+.tab-btn:hover { border-color: var(--accent); color: var(--accent); }
+.tab-btn.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.tab-btn .icon { width: 13px; height: 13px; }
+
+.material-textarea {
+  width: 100%; min-height: 110px; padding: 10px; border: 1px solid var(--rule); border-radius: var(--radius-sm);
+  font-size: 13px; font-family: inherit; resize: vertical; outline: none; line-height: 1.6;
+}
+.material-textarea:focus { border-color: var(--accent); }
+.material-info { display: flex; justify-content: space-between; align-items: center; margin-top: 6px; }
+.material-count { font-size: 12px; color: var(--muted); }
+
+/* Drop zone */
+.drop-zone {
+  border: 2px dashed var(--rule); border-radius: var(--radius-sm); padding: 16px;
+  text-align: center; color: var(--muted); font-size: 13px; cursor: pointer;
+  transition: all 0.2s; margin-top: 4px;
+}
+.drop-zone:hover, .drop-zone.dragover { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.drop-zone .icon { width: 24px; height: 24px; margin: 0 auto 6px; }
+.drop-zone input { display: none; }
+.drop-zone-hint { font-size: 11px; margin-top: 4px; color: var(--muted); }
+
+.file-list { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+.file-item { display: flex; align-items: center; gap: 6px; padding: 5px 8px; background: var(--bg); border-radius: 6px; font-size: 12px; }
+.file-item .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-item .size { color: var(--muted); flex-shrink: 0; }
+.file-item .remove { cursor: pointer; color: var(--muted); border: none; background: none; padding: 0; line-height: 1; }
+.file-item .remove:hover { color: var(--danger); }
+
+/* ── Stats ── */
+.stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.stat-card { background: var(--bg); border-radius: var(--radius-sm); padding: 10px 12px; text-align: center; }
+.stat-value { font-size: 22px; font-weight: 700; color: var(--accent); }
+.stat-label { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+/* ── Review ── */
+.review-list { display: flex; flex-direction: column; gap: 6px; max-height: 200px; overflow-y: auto; }
+.review-item { display: flex; align-items: center; gap: 8px; padding: 7px 10px; background: var(--bg); border-radius: var(--radius-sm); font-size: 13px; }
+.review-item .lesson { flex: 1; font-weight: 600; font-size: 12px; }
+.review-item .retrievability { font-size: 11px; color: var(--muted); }
+
+/* ── Mastery ── */
+.mastery-list { display: flex; flex-direction: column; gap: 10px; max-height: 260px; overflow-y: auto; }
+.mastery-header { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px; }
+.mastery-name { font-weight: 600; }
+.mastery-score { font-weight: 600; }
+.mastery-bar { height: 5px; background: var(--rule); border-radius: 3px; overflow: hidden; }
+.mastery-bar-fill { height: 100%; border-radius: 3px; transition: width 0.4s ease; }
+.bar-high { background: var(--success); }
+.bar-mid  { background: var(--warning); }
+.bar-low  { background: var(--danger); }
+
+/* ── Mock Exam ── */
+.mock-area { padding: 16px; overflow-y: auto; flex: 1; }
+.mock-question { background: var(--bg); border-radius: var(--radius); padding: 14px; margin-bottom: 12px; }
+.mock-question-num { font-size: 12px; font-weight: 700; color: var(--accent); margin-bottom: 6px; }
+.mock-question-text { font-size: 14px; margin-bottom: 10px; line-height: 1.6; }
+
+/* ── Panel views ── */
+.panel-view { display: none; flex: 1; overflow-y: auto; }
+.panel-view.active { display: flex; flex-direction: column; }
+
+/* ── Toast ── */
+.toast { position: fixed; bottom: 24px; right: 24px; background: var(--ink); color: #fff; padding: 10px 16px; border-radius: var(--radius-sm); font-size: 13px; opacity: 0; transition: opacity 0.2s; pointer-events: none; z-index: 1000; }
+.toast.show { opacity: 1; }
+
+/* ── Setup ── */
+.setup-screen { position: fixed; inset: 0; background: var(--bg); display: flex; align-items: center; justify-content: center; z-index: 200; }
+.setup-card { background: var(--panel); border-radius: var(--radius); padding: 36px; width: 400px; box-shadow: 0 10px 40px rgba(0,0,0,0.1); }
+.setup-card h2 { font-size: 22px; font-weight: 700; margin-bottom: 4px; color: var(--accent); }
+.setup-card p { font-size: 13px; color: var(--muted); margin-bottom: 24px; }
+.form-field { margin-bottom: 14px; }
+.form-field label { font-size: 12px; font-weight: 600; color: var(--muted); display: block; margin-bottom: 4px; }
+.form-field input, .form-field select {
+  width: 100%; padding: 8px 12px; border: 1px solid var(--rule); border-radius: var(--radius-sm);
+  font-size: 14px; font-family: inherit; outline: none;
+}
+.form-field input:focus, .form-field select:focus { border-color: var(--accent); }
+
+/* ── Misc ── */
+.spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--rule); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.7s linear infinite; vertical-align: middle; margin-right: 4px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.view-body { padding: 20px; flex: 1; overflow-y: auto; }
+</style>
+</head>
+<body>
+
+<!-- Setup Screen -->
+<div class="setup-screen" id="setupScreen">
+  <div class="setup-card">
+    <h2>Lumen-Bailian</h2>
+    <p>个性化学习路径规划助手</p>
+    <div class="form-field">
+      <label>后端地址</label>
+      <input id="setupHost" value="http://127.0.0.1:3000" />
+    </div>
+    <div class="form-field">
+      <label>用户ID（昵称）</label>
+      <input id="setupUserId" value="student1" />
+    </div>
+    <div class="form-field">
+      <label>课程ID（留空使用演示课程）</label>
+      <input id="setupCourseId" value="demo_python" placeholder="demo_python" />
+    </div>
+    <button class="btn btn-primary" style="width:100%" onclick="startApp()">进入学习</button>
+  </div>
+</div>
+
+<!-- Main App -->
+<div class="layout" id="mainApp" style="display:none">
+
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <div class="sidebar-header">
+      <div class="logo">Lumen</div>
+      <div class="sub">学习路径规划</div>
+    </div>
+    <nav>
+      <button class="nav-item active" onclick="switchView('chat')" id="nav-chat">
+        <i data-lucide="message-circle" class="icon"></i> 智能答疑
+      </button>
+      <button class="nav-item" onclick="switchView('review')" id="nav-review">
+        <i data-lucide="calendar" class="icon"></i> 复习安排
+      </button>
+      <button class="nav-item" onclick="switchView('mastery')" id="nav-mastery">
+        <i data-lucide="bar-chart-2" class="icon"></i> 掌握度报告
+      </button>
+      <button class="nav-item" onclick="switchView('mock')" id="nav-mock">
+        <i data-lucide="edit-3" class="icon"></i> 自适应模考
+      </button>
+    </nav>
+    <div class="sidebar-footer">
+      <div class="nav-item">
+        <i data-lucide="user" class="icon"></i> <span id="displayUserId">student1</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main Content -->
+  <div class="main">
+    <div class="topbar">
+      <span class="topbar-title" id="topbarTitle">智能答疑</span>
+      <button class="btn btn-secondary btn-small" onclick="switchView('review'); document.getElementById('examDateInput').focus()">
+        <i data-lucide="calendar" style="width:13px;height:13px;vertical-align:middle;margin-right:3px"></i>设置考试日期
+      </button>
+      <div class="topbar-status" id="topbarStatus"></div>
+    </div>
+
+    <!-- Chat -->
+    <div class="panel-view active" id="view-chat">
+      <div class="chat-area">
+        <div class="chat-messages" id="chatMessages"></div>
+        <div class="chat-input-area">
+          <textarea class="chat-input" id="chatInput" rows="1" placeholder="输入问题，或粘贴课件内容（200字以上自动识别导入）..." onkeydown="handleChatKey(event)"></textarea>
+          <button class="btn btn-primary" onclick="sendChat()">发送</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Review -->
+    <div class="panel-view" id="view-review">
+      <div class="view-body">
+        <h3 style="margin-bottom:16px"><i data-lucide="calendar" style="width:18px;height:18px;vertical-align:middle;margin-right:6px"></i>复习安排</h3>
+        <div style="display:flex;gap:12px;margin-bottom:16px;align-items:flex-end">
+          <div class="form-field" style="margin:0;flex:1">
+            <label>考试日期</label>
+            <input type="date" id="examDateInput" />
+          </div>
+          <button class="btn btn-primary" onclick="loadReviewSchedule()">查询复习计划</button>
+        </div>
+        <div class="stats-grid" id="reviewStats" style="margin-bottom:16px;display:none">
+          <div class="stat-card"><div class="stat-value" id="statTotal">0</div><div class="stat-label">知识块</div></div>
+          <div class="stat-card"><div class="stat-value" id="statUrgent">0</div><div class="stat-label">紧迫知识点</div></div>
+        </div>
+        <div class="panel-title">建议复习（按遗忘风险排序）</div>
+        <div class="review-list" id="reviewList"></div>
+      </div>
+    </div>
+
+    <!-- Mastery -->
+    <div class="panel-view" id="view-mastery">
+      <div class="view-body">
+        <h3 style="margin-bottom:4px"><i data-lucide="bar-chart-2" style="width:18px;height:18px;vertical-align:middle;margin-right:6px"></i>掌握度报告</h3>
+        <p style="font-size:13px;color:var(--muted);margin-bottom:16px">基于检索和答题记录评估各章节掌握情况</p>
+        <div class="stats-grid" style="margin-bottom:20px">
+          <div class="stat-card"><div class="stat-value" id="masteryOverall">0%</div><div class="stat-label">总体掌握度</div></div>
+          <div class="stat-card"><div class="stat-value" id="masteryWeak">0</div><div class="stat-label">薄弱章节</div></div>
+        </div>
+        <div class="panel-title">各章节掌握度</div>
+        <div class="mastery-list" id="masteryList"></div>
+        <button class="btn btn-secondary" style="margin-top:16px" onclick="loadMastery()">
+          <i data-lucide="refresh-cw" style="width:13px;height:13px;vertical-align:middle;margin-right:4px"></i>刷新报告
+        </button>
+      </div>
+    </div>
+
+    <!-- Mock -->
+    <div class="panel-view" id="view-mock">
+      <div class="mock-area">
+        <h3 style="margin-bottom:12px"><i data-lucide="edit-3" style="width:18px;height:18px;vertical-align:middle;margin-right:6px"></i>自适应模考</h3>
+        <p style="font-size:13px;color:var(--muted);margin-bottom:16px">从不同章节出题，根据答题情况自适应调整难度</p>
+        <button class="btn btn-primary" onclick="startMock()" id="mockStartBtn">
+          <i data-lucide="play" style="width:14px;height:14px;vertical-align:middle;margin-right:4px"></i>开始模考
+        </button>
+        <div id="mockContent" style="margin-top:16px"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Right Panel -->
+  <div class="right-panel">
+    <div class="panel-section" style="flex-shrink:0">
+      <div class="panel-title">导入课件</div>
+
+      <!-- Tabs -->
+      <div class="material-tabs">
+        <button class="tab-btn active" id="tab-paste" onclick="switchTab('paste')">
+          <i data-lucide="clipboard" class="icon"></i> 粘贴文本
+        </button>
+        <button class="tab-btn" id="tab-upload" onclick="switchTab('upload')">
+          <i data-lucide="upload" class="icon"></i> 上传文件
+        </button>
+      </div>
+
+      <!-- Paste tab -->
+      <div id="pane-paste">
+        <textarea class="material-textarea" id="materialInput" placeholder="粘贴课件文本内容（200字以上）..."></textarea>
+        <div class="material-info">
+          <span class="material-count" id="materialCount">0 字</span>
+          <button class="btn btn-secondary btn-small" onclick="importMaterial()">导入</button>
+        </div>
+      </div>
+
+      <!-- Upload tab -->
+      <div id="pane-upload" style="display:none">
+        <div class="drop-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
+          <i data-lucide="file-plus" class="icon"></i>
+          <div>点击或拖拽文件到这里</div>
+          <div class="drop-zone-hint">支持 .md .pdf .docx .pptx</div>
+          <input type="file" id="fileInput" accept=".md,.pdf,.docx,.pptx" multiple onchange="handleFileSelect(event)" />
+        </div>
+        <div class="file-list" id="fileList"></div>
+        <button class="btn btn-primary" style="width:100%;margin-top:8px" onclick="uploadFiles()">
+          <i data-lucide="upload-cloud" style="width:14px;height:14px;vertical-align:middle;margin-right:4px"></i>上传并导入
+        </button>
+      </div>
+    </div>
+
+    <!-- Dashboard -->
+    <div class="panel-section flex-1">
+      <div class="panel-title">今日概况</div>
+      <div class="stats-grid" style="margin-bottom:12px">
+        <div class="stat-card"><div class="stat-value" id="rightToday">0</div><div class="stat-label">今日答对</div></div>
+        <div class="stat-card"><div class="stat-value" id="wrongToday">0</div><div class="stat-label">今日答错</div></div>
+      </div>
+      <div class="panel-title">紧迫复习</div>
+      <div class="review-list" id="urgentReviewList"></div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+// ── State ───────────────────────────────────────────────────────
+let HOST = 'http://127.0.0.1:3000';
+let USER_ID = 'student1';
+let COURSE_ID = 'demo_python';
+let messages = [];
+let mockTopics = [], mockIndex = 0, mockResults = [];
+let pendingFiles = [];
+let currentTab = 'paste';
+
+// ── Init ────────────────────────────────────────────────────────
+function startApp() {
+  HOST = document.getElementById('setupHost').value.trim() || 'http://127.0.0.1:8080';
+  USER_ID = document.getElementById('setupUserId').value.trim() || 'student1';
+  COURSE_ID = document.getElementById('setupCourseId').value.trim() || 'demo_python';
+  document.getElementById('displayUserId').textContent = USER_ID;
+  document.getElementById('setupScreen').style.display = 'none';
+  document.getElementById('mainApp').style.display = 'flex';
+  lucide.createIcons();
+  loadUrgentReview();
+  loadTodayStats();
+  addBotMessage(
+    '你好！我是 Lumen，你的 AI 学习助手。\n\n' +
+    '可以粘贴课件文本（200字以上）或上传 .md / .pdf / .docx / .pptx 文件，我会自动整理并存入知识库。问我任何与课程相关的问题，我会从知识库中检索回答。'
+  );
+}
+
+// ── API ─────────────────────────────────────────────────────────
+async function api(path, body) {
+  const resp = await fetch(HOST + path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...body, user_id: USER_ID, course_id: COURSE_ID }),
+  });
+  const json = await resp.json();
+  if (json.code !== 200) throw new Error(json.message || 'API error');
+  return json.data;
+}
+
+// ── Chat ────────────────────────────────────────────────────────
+function switchView(name) {
+  document.querySelectorAll('.panel-view').forEach(v => v.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById('view-' + name).classList.add('active');
+  const btn = document.getElementById('nav-' + name);
+  if (btn) btn.classList.add('active');
+  const titles = { chat:'智能答疑', review:'复习安排', mastery:'掌握度报告', mock:'自适应模考' };
+  document.getElementById('topbarTitle').textContent = titles[name] || name;
+  if (name === 'review') loadReviewSchedule();
+  if (name === 'mastery') loadMastery();
+  lucide.createIcons();
+}
+
+function handleChatKey(e) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
+}
+
+async function sendChat() {
+  const input = document.getElementById('chatInput');
+  const text = input.value.trim();
+  if (!text) return;
+
+  // Auto-import long pastes
+  if (text.length >= 200) {
+    addUserMessage(text.slice(0, 80) + '...');
+    addBotMessage(`收到课件内容（共 ${text.length} 字），正在存入知识库...`);
+    input.value = '';
+    try {
+      const encoded = btoa(unescape(encodeURIComponent(text)));
+      const data = await api('/api/v1/knowledge/upload', {
+        filename: 'pasted_text.txt', content: encoded,
+        course_id: COURSE_ID, course_title: '粘贴导入',
+      });
+      showToast('导入成功：' + data.chunks_ingested + ' 个知识块');
+      loadUrgentReview();
+    } catch(e) { showToast('导入失败: ' + e.message); }
+    return;
+  }
+
+  addUserMessage(text);
+  setInputLoading(true);
+  try {
+    const data = await api('/api/v1/tutor/ask', { question: text });
+    addBotMessage(data.answer || '（无回答）', data.evidence);
+    setTopbarStatus(`迭代 ${data.iterations} | LLM ${data.llm_calls}/${data.max_llm_calls}`);
+  } catch(e) {
+    addBotMessage('抱歉，发生了错误：' + e.message);
+  } finally {
+    setInputLoading(false);
+  }
+}
+
+function addUserMessage(text) {
+  messages.push({ role: 'user', content: text });
+  renderMessages();
+}
+
+function addBotMessage(text, evidence) {
+  messages.push({ role: 'agent', content: text, evidence });
+  renderMessages();
+}
+
+function renderMessages() {
+  const el = document.getElementById('chatMessages');
+  el.innerHTML = messages.map(m => {
+    const evHtml = (m.evidence || []).map((_, i) => `<span class="ref-tag">[参考${i+1}]</span>`).join('');
+    return `<div class="chat-msg ${m.role}">
+      <div class="chat-avatar">${m.role === 'user' ? '我' : 'AI'}</div>
+      <div class="chat-bubble">${escapeHtml(m.content)}${evHtml}</div>
+    </div>`;
+  }).join('');
+  el.scrollTop = el.scrollHeight;
+}
+
+function setInputLoading(loading) {
+  const btn = document.querySelector('.chat-input-area .btn-primary');
+  btn.disabled = loading;
+  btn.innerHTML = loading ? '<span class="spinner"></span>思考中' : '发送';
+}
+
+function setTopbarStatus(text) { document.getElementById('topbarStatus').textContent = text; }
+
+// ── Material: Paste ─────────────────────────────────────────────
+document.getElementById('materialInput').addEventListener('input', function() {
+  document.getElementById('materialCount').textContent = this.value.length + ' 字';
+});
+
+async function importMaterial() {
+  const text = document.getElementById('materialInput').value.trim();
+  if (!text) { showToast('请先粘贴课件内容'); return; }
+  if (text.length < 200) { showToast('内容过短（需≥200字）'); return; }
+  try {
+    showToast('正在导入知识库...');
+    const encoded = btoa(unescape(encodeURIComponent(text)));
+    const data = await api('/api/v1/knowledge/upload', {
+      filename: 'pasted_text.txt', content: encoded,
+      course_id: COURSE_ID, course_title: '粘贴导入',
+    });
+    showToast('导入成功：' + data.chunks_ingested + ' 个知识块');
+    document.getElementById('materialInput').value = '';
+    document.getElementById('materialCount').textContent = '0 字';
+    loadUrgentReview();
+  } catch(e) { showToast('导入失败: ' + e.message); }
+}
+
+// ── Material: Upload ────────────────────────────────────────────
+function switchTab(name) {
+  currentTab = name;
+  document.getElementById('tab-paste').classList.toggle('active', name === 'paste');
+  document.getElementById('tab-upload').classList.toggle('active', name === 'upload');
+  document.getElementById('pane-paste').style.display = name === 'paste' ? '' : 'none';
+  document.getElementById('pane-upload').style.display = name === 'upload' ? '' : 'none';
+  lucide.createIcons();
+}
+
+function formatSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+}
+
+function handleFileSelect(event) {
+  addFiles(Array.from(event.target.files || []));
+  event.target.value = '';
+}
+
+function addFiles(files) {
+  const validExts = ['.md', '.pdf', '.docx', '.pptx'];
+  files.forEach(f => {
+    const ext = '.' + f.name.split('.').pop().toLowerCase();
+    if (!validExts.includes(ext)) { showToast('不支持的格式: ' + ext); return; }
+    if (pendingFiles.find(p => p.name === f.name)) { showToast('文件已添加: ' + f.name); return; }
+    const reader = new FileReader();
+    reader.onload = e => {
+      pendingFiles.push({ name: f.name, size: f.size, bytes: e.target.result });
+      renderFileList();
+    };
+    reader.readAsArrayBuffer(f);
+  });
+}
+
+function renderFileList() {
+  const el = document.getElementById('fileList');
+  el.innerHTML = pendingFiles.map((f, i) => `
+    <div class="file-item">
+      <i data-lucide="file-text" style="width:13px;height:13px;flex-shrink:0;color:var(--muted)"></i>
+      <span class="name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</span>
+      <span class="size">${formatSize(f.size)}</span>
+      <button class="remove" onclick="removeFile(${i})" title="移除">
+        <i data-lucide="x" style="width:12px;height:12px"></i>
+      </button>
+    </div>
+  `).join('');
+  lucide.createIcons();
+}
+
+function removeFile(index) { pendingFiles.splice(index, 1); renderFileList(); }
+
+// Drag and drop
+const dropZone = document.getElementById('dropZone');
+if (dropZone) {
+  dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropZone.classList.remove('dragover');
+    addFiles(Array.from(e.dataTransfer.files));
+  });
+}
+
+async function uploadFiles() {
+  if (!pendingFiles.length) { showToast('请先选择文件'); return; }
+  const btn = document.querySelector('#pane-upload .btn-primary');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>上传中...';
+  let totalChunks = 0;
+  try {
+    for (const f of pendingFiles) {
+      const arr = new Uint8Array(f.bytes);
+      const b64 = arrayBufferToBase64(f.bytes);
+      const data = await api('/api/v1/knowledge/upload', {
+        filename: f.name, content: b64,
+        course_id: COURSE_ID, course_title: '文件导入',
+      });
+      totalChunks += data.chunks_ingested || 0;
+    }
+    showToast('导入成功：' + totalChunks + ' 个知识块');
+    pendingFiles = [];
+    renderFileList();
+    loadUrgentReview();
+  } catch(e) {
+    showToast('上传失败: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i data-lucide="upload-cloud" style="width:14px;height:14px;vertical-align:middle;margin-right:4px"></i>上传并导入';
+    lucide.createIcons();
+  }
+}
+
+// ── Review Schedule ─────────────────────────────────────────────
+async function loadReviewSchedule() {
+  try {
+    const examDate = document.getElementById('examDateInput').value;
+    const body = { user_id: USER_ID, course_id: COURSE_ID, top_k: 5 };
+    if (examDate) body.exam_date = examDate;
+    const data = await api('/api/v1/review/schedule', body);
+    document.getElementById('reviewStats').style.display = 'grid';
+    document.getElementById('statTotal').textContent = data.total_chunks || 0;
+    document.getElementById('statUrgent').textContent = (data.results || []).filter(r => r.urgency_score > 1).length;
+    const list = document.getElementById('reviewList');
+    if (!data.results || data.results.length === 0) {
+      list.innerHTML = '<div style="font-size:13px;color:var(--muted);padding:8px">暂无复习建议</div>';
+      return;
+    }
+    list.innerHTML = data.results.map(r => {
+      const level = r.retrievability < 40 ? 'low' : r.retrievability < 70 ? 'mid' : 'high';
+      return `<div class="review-item">
+        <span class="lesson">${r.lesson_title || r.chunk_id}</span>
+        <span class="mastery-tag ${level}">${Math.round(r.retrievability)}%</span>
+        <span class="retrievability">紧迫${r.urgency_score}</span>
+      </div>`;
+    }).join('');
+    lucide.createIcons();
+  } catch(e) {
+    document.getElementById('reviewList').innerHTML = '<div style="font-size:13px;color:var(--danger)">加载失败: ' + e.message + '</div>';
+  }
+}
+
+// ── Mastery Report ──────────────────────────────────────────────
+async function loadMastery() {
+  try {
+    const data = await api('/api/v1/mastery/report', {});
+    document.getElementById('masteryOverall').textContent = Math.round(data.overall_mastery || 0) + '%';
+    document.getElementById('masteryWeak').textContent = (data.weak_lessons || []).length;
+    const list = document.getElementById('masteryList');
+    if (!data.lesson_summaries || data.lesson_summaries.length === 0) {
+      list.innerHTML = '<div style="font-size:13px;color:var(--muted)">暂无数据</div>';
+      return;
+    }
+    list.innerHTML = data.lesson_summaries.map(l => {
+      const score = l.mastery_score || 0;
+      const cls = score >= 75 ? 'high' : score >= 45 ? 'mid' : 'low';
+      const never = l.never_interacted > 0 ? ' <span style="color:#06b6d4;font-size:11px">新</span>' : '';
+      return `<div style="margin-bottom:10px">
+        <div class="mastery-header">
+          <span class="mastery-name">${l.lesson_title || l.lesson_id}${never}</span>
+          <span class="mastery-score mastery-tag ${cls}">${Math.round(score)}%</span>
+        </div>
+        <div class="mastery-bar"><div class="mastery-bar-fill bar-${cls}" style="width:${score}%"></div></div>
+      </div>`;
+    }).join('');
+    lucide.createIcons();
+  } catch(e) {
+    document.getElementById('masteryList').innerHTML = '<div style="font-size:13px;color:var(--danger)">加载失败: ' + e.message + '</div>';
+  }
+}
+
+// ── Mock Exam ───────────────────────────────────────────────────
+let currentQuestion = null;  // {question, options, correct_answer, chunk_id, progress, lesson_title}
+
+async function startMock() {
+  try {
+    document.getElementById('mockStartBtn').disabled = true;
+    document.getElementById('mockStartBtn').innerHTML = '<span class="spinner"></span>选题中...';
+    const data = await api('/api/v1/mock/start', {});
+    mockTopics = data.topics || [];
+    mockIndex = 0;
+    mockResults = [];
+    currentQuestion = null;
+    // Fetch first question
+    const q = await api('/api/v1/mock/answer', { correct: null });
+    currentQuestion = q;
+    renderMockQuestions();
+  } catch(e) {
+    showToast('模考启动失败: ' + e.message);
+  } finally {
+    document.getElementById('mockStartBtn').disabled = false;
+    document.getElementById('mockStartBtn').innerHTML = '<i data-lucide="play" style="width:14px;height:14px;vertical-align:middle;margin-right:4px"></i>开始模考';
+    lucide.createIcons();
+  }
+}
+
+function renderMockQuestions() {
+  const el = document.getElementById('mockContent');
+
+  if (!currentQuestion || currentQuestion.finished) {
+    const correct = mockResults.filter(r => r.correct).length;
+    el.innerHTML = `<div style="padding:16px;background:var(--bg);border-radius:12px;text-align:center">
+      <div style="font-size:16px;font-weight:700;margin-bottom:8px">模考完成</div>
+      <div style="font-size:13px;color:var(--muted)">共 ${correct}/${mockResults.length} 题正确（${mockResults.length ? Math.round(correct/mockResults.length*100) : 0}%）</div>
+    </div>`;
+    lucide.createIcons();
+    return;
+  }
+
+  const q = currentQuestion;
+  const progress = q.progress || `${mockIndex + 1}/${mockTopics.length}`;
+  const opts = (q.options || []).map((opt, i) =>
+    `<div class="quiz-option" onclick="selectOption(this, '${opt[0]}')">${opt}</div>`
+  ).join('');
+  const hasOptions = opts.length > 0;
+  const inputField = !hasOptions
+    ? `<textarea id="quizTextAnswer" rows="3" placeholder="请在此输入你的回答..." style="width:100%;padding:8px 10px;border:1px solid var(--rule);border-radius:8px;font-size:13px;font-family:inherit;resize:vertical;outline:none;margin-top:8px;line-height:1.6"></textarea>
+       <div style="font-size:11px;color:var(--muted);margin-top:4px">${q.question_type === 'fill_blank' ? '（填空题：填写代码或术语）' : '（简答题：简要说明即可）'}</div>`
+    : '';
+
+  el.innerHTML = `<div style="margin-bottom:16px;font-size:13px;color:var(--muted)">${progress} · ${q.lesson_title || ''}</div>
+  <div class="mock-question">
+    <div class="mock-question-num">${progress}</div>
+    <div class="mock-question-text">${escapeHtml(q.question || '')}</div>
+    ${opts}
+    ${inputField}
+    <div id="quizFeedback" style="margin-top:10px;font-size:13px;display:none"></div>
+    <div style="margin-top:12px;display:flex;gap:8px" id="quizActions">
+      <button class="btn btn-primary" id="quizSubmit" onclick="submitAnswer()">提交答案</button>
+      <button class="btn btn-secondary" onclick="skipQuestion()">跳过此题</button>
+    </div>
+  </div>`;
+  if (hasOptions) {
+    document.getElementById('quizSubmit').style.display = '';
+  }
+  mockIndex++;
+  lucide.createIcons();
+}
+
+let selectedOption = null;
+
+function selectOption(el, optionLetter) {
+  document.querySelectorAll('.quiz-option').forEach(o => o.classList.remove('correct','wrong'));
+  el.classList.add('correct');
+  selectedOption = optionLetter;
+}
+
+function submitAnswer() {
+  if (!currentQuestion) return;
+  const hasOptions = (currentQuestion.options || []).length > 0;
+
+  if (hasOptions) {
+    if (selectedOption === null) { showToast('请先选择一个选项'); return; }
+    const correct = selectedOption === currentQuestion.correct_answer;
+    mockResults.push({ chunk_id: currentQuestion.chunk_id, correct });
+    showFeedback(correct, correct ? '' : '正确答案：' + currentQuestion.correct_answer);
+    setTimeout(advanceQuestion, correct ? 1200 : 2000);
+  } else {
+    // Text question — send to LLM for grading
+    const text = document.getElementById('quizTextAnswer')?.value.trim();
+    if (!text) { showToast('请先输入回答'); return; }
+    const btn = document.getElementById('quizSubmit');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>评判中...';
+    api('/api/v1/mock/answer', {
+      answer_text: text,
+      course_id: COURSE_ID,
+    }).then(data => {
+      if (data.finished) { currentQuestion = data; renderMockQuestions(); return; }
+      const correct = data.grading_feedback === "" && mockResults[mockResults.length - 1]?.correct;
+      mockResults.push({ chunk_id: currentQuestion.chunk_id, correct });
+      const feedbackText = data.grading_feedback || (correct ? '正确！' : '错误');
+      showFeedback(correct, data.grading_feedback || (correct ? '' : '正确答案：' + (data.correct_answer || '')));
+      setTimeout(advanceQuestion, correct ? 1500 : 2500);
+    }).catch(e => {
+      showToast('评判失败: ' + e.message);
+      btn.disabled = false;
+      btn.textContent = '提交答案';
+    });
+  }
+}
+
+function showFeedback(correct, extraText) {
+  const feedback = document.getElementById('quizFeedback');
+  if (!feedback) return;
+  feedback.style.display = '';
+  feedback.innerHTML = correct
+    ? '<span style="color:var(--success)">回答正确！</span>'
+    : `<span style="color:var(--danger)">${extraText || '回答错误'}</span>`;
+  const btn = document.getElementById('quizSubmit');
+  if (btn) btn.style.display = 'none';
+}
+
+function skipQuestion() {
+  mockResults.push({ chunk_id: currentQuestion?.chunk_id, correct: false });
+  advanceQuestion();
+}
+
+async function advanceQuestion() {
+  selectedOption = null;
+  try {
+    const q = await api('/api/v1/mock/answer', { correct: mockResults[mockResults.length - 1]?.correct });
+    currentQuestion = q;
+    renderMockQuestions();
+    loadUrgentReview();
+  } catch(e) {
+    showToast('加载下一题失败: ' + e.message);
+  }
+}
+
+// ── Dashboard ───────────────────────────────────────────────────
+async function loadUrgentReview() {
+  try {
+    const data = await api('/api/v1/review/schedule', { top_k: 3 });
+    const list = document.getElementById('urgentReviewList');
+    list.innerHTML = (data.results || []).slice(0, 3).map(r => {
+      const cls = r.retrievability < 40 ? 'low' : r.retrievability < 70 ? 'mid' : 'high';
+      return `<div class="review-item">
+        <span class="lesson" style="font-size:12px">${r.lesson_title || r.chunk_id}</span>
+        <span class="mastery-tag ${cls}" style="font-size:11px">${Math.round(r.retrievability)}%</span>
+      </div>`;
+    }).join('') || '<div style="font-size:12px;color:var(--muted);padding:4px">暂无紧迫复习</div>';
+    lucide.createIcons();
+  } catch(e) {}
+}
+
+function loadTodayStats() {
+  document.getElementById('rightToday').textContent = '0';
+  document.getElementById('wrongToday').textContent = '0';
+}
+
+// ── Utils ───────────────────────────────────────────────────────
+function arrayBufferToBase64(buffer) {
+  let s = '';
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 5000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    s += String.fromCharCode.apply(null, Array.from(bytes.slice(i, i + chunkSize)));
+  }
+  return btoa(s);
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function showToast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 2500);
+}
+</script>
+</body>
+</html>

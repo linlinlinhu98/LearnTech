@@ -414,7 +414,7 @@ async def ingest_text(
 
     # Build LessonChunk objects
     try:
-        from .knowledge_store import LessonChunk, embedding_provider, knowledge_store
+        from knowledge_store import LessonChunk, embedding_provider, knowledge_store
     except ImportError:
         from knowledge_store import LessonChunk, embedding_provider, knowledge_store
 
@@ -481,7 +481,7 @@ async def schedule_review(
     _set_session_exam(user_id, exam_date or None)
 
     try:
-        from .knowledge_store import knowledge_store
+        from knowledge_store import knowledge_store
     except ImportError:
         from knowledge_store import knowledge_store
 
@@ -599,7 +599,7 @@ async def mastery_report(
 ) -> str:
     """Generate a text mastery report for a course based on retrieval and quiz records."""
     try:
-        from .knowledge_store import knowledge_store
+        from knowledge_store import knowledge_store
     except ImportError:
         from knowledge_store import knowledge_store
 
@@ -722,6 +722,7 @@ async def mock_exam(
     course_id: str = "",
     user_id: str = "",
     budget: LlmBudget | None = None,
+    **kwargs,
 ) -> str:
     """Adaptive mock exam tool.
 
@@ -733,7 +734,9 @@ async def mock_exam(
         return _mock_start(course_id, user_id)
 
     if action == "answer":
-        return await _mock_answer(course_id, user_id, budget)
+        correct = kwargs.get("correct")
+        answer_text = kwargs.get("answer_text", "")
+        return await _mock_answer(course_id, user_id, budget, correct=correct, answer_text=answer_text)
 
     return json.dumps({"error": f"未知 action: {action}"}, ensure_ascii=False)
 
@@ -741,7 +744,7 @@ async def mock_exam(
 def _mock_start(course_id: str, user_id: str) -> str:
     """Pick topics and initialize exam session. 0 LLM calls."""
     try:
-        from .knowledge_store import knowledge_store
+        from knowledge_store import knowledge_store
     except ImportError:
         from knowledge_store import knowledge_store
 
@@ -806,14 +809,61 @@ def _mock_start(course_id: str, user_id: str) -> str:
     }, ensure_ascii=False)
 
 
-async def _mock_answer(course_id: str, user_id: str, budget: LlmBudget | None) -> str:
-    """Process student's answer feedback and advance exam. 1 LLM call if calling generate_quiz."""
-    if not budget is None and not _charge(budget):
-        return json.dumps({
-            "finished": True,
-            "error": "LLM 预算已耗尽，无法继续出题。",
-        }, ensure_ascii=False)
+async def _grade_answer(
+    answer_text: str,
+    question: str,
+    correct_answer: str,
+    question_type: str,
+    budget: LlmBudget | None,
+) -> dict:
+    """Use LLM to grade a learner's text answer. Returns {correct, feedback}."""
+    if question_type == "single_choice" and correct_answer:
+        # Multiple choice: exact match
+        first_char = answer_text.strip()[0].upper()
+        correct = first_char == correct_answer.upper()[0]
+        return {"correct": correct, "feedback": ""}
 
+    # For fill_blank and short_answer, use LLM to judge
+    system_msg = (
+        "你是一位严格的编程助教。请判断学生的回答是否正确。\n"
+        "填空题：学生填的内容是否与标准答案语义一致或等效（大小写/术语差异可接受）。\n"
+        "简答题：学生是否理解了核心概念，解释是否基本正确（不需要完美，允许合理误差）。\n"
+        "只输出JSON（无Markdown）：\n"
+        '{"correct": true或false, "feedback": "1-2句话的点评，指出问题或肯定优点"}'
+    )
+    user_msg = (
+        f"题目：{question}\n"
+        f"标准答案（参考）：{correct_answer}\n"
+        f"学生回答：{answer_text}\n"
+        f"题型：{question_type}\n"
+        "请判断学生回答是否正确，并给出简短点评。"
+    )
+
+    try:
+        from llm_utils import chat_completion_json
+        result = await chat_completion_json([
+            {"role": "system", "content": system_msg},
+            {"role": "user", "content": user_msg},
+        ])
+        if isinstance(result, dict):
+            return {
+                "correct": bool(result.get("correct")),
+                "feedback": str(result.get("feedback", "")),
+            }
+    except Exception:
+        pass
+    # Fallback: mark wrong if we can't grade
+    return {"correct": False, "feedback": "（自动评判不可用，请自行核对答案）"}
+
+
+async def _mock_answer(
+    course_id: str,
+    user_id: str,
+    budget: LlmBudget | None = None,
+    correct: bool | None = None,
+    answer_text: str = "",
+) -> str:
+    """Record answer (grade via LLM if text provided), adjust difficulty, generate next question."""
     session = _mock_session.get(user_id, {})
     if session.get("state") != "active":
         return json.dumps({
@@ -824,37 +874,154 @@ async def _mock_answer(course_id: str, user_id: str, budget: LlmBudget | None) -
     idx = session.get("current_index", 0)
     results = session.get("results", [])
 
-    if idx >= len(topics):
+    # If text answer provided, use LLM to grade it (consumes 1 budget call)
+    if answer_text and correct is None:
+        if not _charge(budget):
+            return json.dumps({"finished": True, "error": "LLM 预算已耗尽，无法评判回答。"}, ensure_ascii=False)
+        grading_result = await _grade_answer(
+            answer_text=answer_text,
+            question=session.get("last_question", {}).get("question", ""),
+            correct_answer=session.get("last_question", {}).get("correct_answer", ""),
+            question_type=session.get("last_question", {}).get("question_type", "short_answer"),
+            budget=budget,
+        )
+        correct = grading_result["correct"]
+        grading_feedback = grading_result.get("feedback", "")
+    else:
+        grading_feedback = ""
+
+    # Record previous answer
+    if idx > 0 and correct is not None:
+        prev_topic = topics[idx - 1]
+        prev_chunk_id = prev_topic["chunk_id"]
+        results.append({"chunk_id": prev_chunk_id, "correct": correct})
+        session["results"] = results
+        streak_key = f"{user_id}:{prev_chunk_id}"
+        if correct:
+            _mock_streak[streak_key] = _mock_streak.get(streak_key, 0) + 1
+            if _mock_streak.get(streak_key, 0) >= 2:
+                _weak_chunks.get(user_id, set()).discard(prev_chunk_id)
+        else:
+            _mock_streak[streak_key] = 0
+            _weak_chunks.setdefault(user_id, set()).add(prev_chunk_id)
+        await record_answer(prev_chunk_id, user_id, correct)
+
+    # Check if exam is done
+    if session["current_index"] >= len(topics):
         return _mock_summary(user_id, session)
 
-    topic = topics[idx]
+    topic = topics[session["current_index"]]
     chunk_id = topic["chunk_id"]
+    session["current_index"] += 1
 
-    # Move to next
-    session["current_index"] = idx + 1
-    session["llm_used"] = session.get("llm_used", 0) + 1
+    # Get chunk text for context
+    chunk_text = ""
+    try:
+        from knowledge_store import knowledge_store as _ks_instance
+    except ImportError:
+        from knowledge_store import knowledge_store as _ks_instance
+    for ck, _ in _ks_instance._chunks:
+        if ck.id == chunk_id:
+            chunk_text = ck.text[:500]
+            break
 
-    # Update weak chunk streak
+    if not _charge(budget):
+        return json.dumps({
+            "finished": True,
+            "error": "LLM 预算已耗尽，无法继续出题。",
+        }, ensure_ascii=False)
+
+    # Determine difficulty based on streak
     streak_key = f"{user_id}:{chunk_id}"
-    prev_streak = _mock_streak.get(streak_key, 0)
+    streak = _mock_streak.get(streak_key, 0)
+    if streak >= 3:
+        difficulty = "hard"
+    elif streak >= 1:
+        difficulty = "medium"
+    else:
+        difficulty = "easy"
 
-    # After answering, advance; if session ended naturally (user called answer after last question)
-    # we compute correct/incorrect from previous result if available
-    if idx >= len(topics):
-        return _mock_summary(user_id, session)
+    # Generate question via LLM — vary question type by index for variety
+    question_types = ["single_choice", "fill_blank", "short_answer", "single_choice", "fill_blank"]
+    qtype = question_types[session.get("current_index", 0) % len(question_types)]
 
-    # Return next topic info for the LLM to generate a question
-    # The dispatcher will call generate_quiz internally after seeing this
+    if qtype == "single_choice":
+        system_msg = (
+            "你是一位Python数据分析助教。根据【课程内容】出1道单选题，题目中必须包含课程内容里出现的具体代码或术语。\n"
+            "严格遵循以下JSON格式（不要输出任何其他内容）：\n"
+            '{"question":"在Python中，list和dict的主要区别是？\\nA. list有序dict无序\\nB. list用[]访问dict用[]访问\\nC. list可修改dict不可修改\\nD. list元素不重复dict元素可重复","options":["A. list有序dict无序","B. list用[]访问dict用[]访问","C. list可修改dict不可修改","D. list元素不重复dict元素可重复"],"answer":"A"}'
+        )
+        user_msg = (
+            f"【课程内容】（必须基于这段内容出题，禁止脱离这段内容编造）：\n{chunk_text}\n\n"
+            f"难度：{difficulty}\n出1道与上述课程内容直接相关的单选题。"
+        )
+    elif qtype == "fill_blank":
+        system_msg = (
+            "你是一位Python数据分析助教。根据【课程内容】出1道填空题，"
+            "答案必须是课程内容里出现过的具体代码、函数名或术语。\n"
+            "严格遵循以下JSON格式（不要输出任何其他内容）：\n"
+            '{"question":"在Python中，创建空列表的语句是___","options":[],"answer":"[]"}'
+        )
+        user_msg = (
+            f"【课程内容】（必须基于这段内容出题，禁止脱离这段内容编造）：\n{chunk_text}\n\n"
+            f"难度：{difficulty}\n出1道与上述课程内容直接相关的填空题。"
+        )
+    else:
+        system_msg = (
+            "你是一位Python数据分析助教。根据【课程内容】出1道简答题，"
+            "题目必须涉及课程内容中出现的具体代码示例或概念对比。\n"
+            "严格遵循以下JSON格式（不要输出任何其他内容）：\n"
+            '{"question":"请写出列表推导式[表达式 for 变量 in 可迭代对象]的完整语法，并举一个实际例子","options":[],"answer":""}'
+        )
+        user_msg = (
+            f"【课程内容】（必须基于这段内容出题，禁止脱离这段内容编造）：\n{chunk_text}\n\n"
+            f"难度：{difficulty}\n出1道与上述课程内容直接相关的简答题。"
+        )
+
+    messages = [
+        {"role": "system", "content": system_msg},
+        {"role": "user", "content": user_msg},
+    ]
+
+    try:
+        from llm_utils import chat_completion_json
+        llm_result = await chat_completion_json(messages)
+        if isinstance(llm_result, dict) and not llm_result.get("error"):
+            question_data = llm_result
+        else:
+            question_data = {
+                "question": f"请解释 {topic['lesson_title']} 中的核心概念，并说明其在数据分析中的应用。",
+                "options": [],
+                "answer": "",
+            }
+    except Exception:
+        question_data = {
+            "question": f"关于「{topic['lesson_title']}」，请简要说明其核心知识点。",
+            "options": [],
+            "answer": "",
+        }
+
+    session["llm_used"] = session.get("llm_used", 0) + 1
+    last_q = {
+        "question": question_data.get("question", f"请解释 {topic['lesson_title']}。"),
+        "options": question_data.get("options", []),
+        "correct_answer": question_data.get("answer", ""),
+        "question_type": qtype,
+        "lesson_title": topic["lesson_title"],
+        "chunk_id": chunk_id,
+    }
+    session["last_question"] = last_q
+
     return json.dumps({
-        "next_topic": {
-            "lesson_title": topic["lesson_title"],
-            "section_id": topic["section_id"],
-            "course_title": topic["course_title"],
-            "chunk_id": chunk_id,
-        },
-        "progress": f"{idx + 1}/{len(topics)}",
-        "llm_remaining": budget.max_calls - budget.used if budget else "unknown",
-        "note": f"第 {idx+1} 题，请针对「{topic['lesson_title']}」出一道练习题。",
+        "question": last_q["question"],
+        "options": last_q["options"],
+        "correct_answer": last_q["correct_answer"],
+        "question_type": qtype,
+        "progress": f"{session['current_index']}/{len(topics)}",
+        "lesson_title": topic["lesson_title"],
+        "chunk_id": chunk_id,
+        "note": "请作答，系统会自动记录。",
+        "grading_feedback": grading_feedback if idx > 0 else "",
     }, ensure_ascii=False)
 
 

@@ -19,9 +19,11 @@ from __future__ import annotations
 import os
 import socket
 import uuid
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 
 # ---- Lumen imports (dual-mode: package vs direct execution) ----
 try:
@@ -36,6 +38,8 @@ try:
     from .dispatcher import TutorDispatcher
     from . import tutor_core as _tutor_core_mod
     from .tutor_core import build_tool_registry
+    from .file_parser import parse_file, SUPPORTED
+    from .llm_utils import LlmBudget
 except ImportError:  # Direct execution / local tests
     import authoring as _authoring_mod
     import intake as _intake_mod
@@ -48,6 +52,8 @@ except ImportError:  # Direct execution / local tests
     from dispatcher import TutorDispatcher
     import tutor_core as _tutor_core_mod
     from tutor_core import build_tool_registry
+    from file_parser import parse_file, SUPPORTED
+    from llm_utils import LlmBudget
 
 
 # ---- flat YAML config (no pyyaml) ----
@@ -96,6 +102,14 @@ def _ok(data=None, message="success"):
 
 
 app = FastAPI(title="Lumen-Bailian (local)")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # ---- seed demo course data once at startup ----
@@ -328,6 +342,90 @@ async def knowledge_ingest(request: Request):
     })
 
 
+@app.post("/api/v1/knowledge/upload")
+async def knowledge_upload(request: Request):
+    """Parse and ingest a uploaded file (.md .pdf .docx .pptx).
+
+    Uses FastAPI's UploadFile for multipart/form-data, or accepts raw
+    file bytes + filename in JSON body as fallback.
+    """
+    import io as _io
+
+    content_type = request.headers.get("content-type", "")
+
+    if "multipart/form-data" in content_type:
+        # FastAPI multipart
+        form = await request.form()
+        file = form.get("file")
+        if file is None:
+            return JSONResponse(status_code=400, content={"error": "file part is required"})
+        filename = getattr(file, "filename", "unknown")
+        file_bytes = await file.read()
+    else:
+        # JSON body: { "filename": "...", "content": "<base64>" }
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse(status_code=400, content={"error": "invalid JSON body"})
+        filename = str(body.get("filename") or "")
+        b64 = str(body.get("content") or "")
+        if not b64:
+            return JSONResponse(status_code=400, content={"error": "content (base64) is required"})
+        try:
+            import base64 as _base64
+            file_bytes = _base64.b64decode(b64)
+        except Exception as e:
+            return JSONResponse(status_code=400, content={"error": f"base64 decode error: {e}"})
+
+    course_id = str(body.get("course_id") or "") if "multipart" not in content_type else ""
+    course_title = str(body.get("course_title") or "") if "multipart" in content_type else ""
+    user_id = str(body.get("user_id") or "") if "multipart" in content_type else ""
+
+    try:
+        text = parse_file(file_bytes, filename)
+    except Exception as e:
+        return JSONResponse(status_code=422, content={"error": str(e)})
+
+    if len(text) < 50:
+        return JSONResponse(status_code=422, content={"error": "文件内容过少，无法导入"})
+
+    # Chunk the text (simple 300-char chunks with 50-char overlap)
+    chunk_size = 300
+    overlap = 50
+    chunks, texts = [], []
+    i = 0
+    while i < len(text):
+        chunk_text = text[i : i + chunk_size].strip()
+        if chunk_text:
+            cid = str(uuid.uuid4())[:8]
+            chunks.append(LessonChunk(
+                id=cid,
+                lesson_id=f"uploaded_{cid}",
+                lesson_title=f"{Path(filename).stem} (片段{len(chunks)+1})",
+                section_id="",
+                text=chunk_text,
+                course_id=course_id,
+                course_title=course_title,
+            ))
+            texts.append(chunk_text)
+        i += chunk_size - overlap
+
+    if texts:
+        try:
+            embeddings = embedding_provider.embed(texts)
+        except Exception:
+            embeddings = embedding_provider._noop_embed(texts)
+        knowledge_store.add_chunks(chunks, embeddings)
+
+    return _ok(data={
+        "filename": filename,
+        "text_length": len(text),
+        "chunks_ingested": len(chunks),
+        "total_chunks": len(knowledge_store),
+        "preview": text[:200],
+    })
+
+
 @app.post("/api/v1/knowledge/courses")
 def list_courses():
     """List all courses stored in the knowledge base."""
@@ -387,16 +485,16 @@ async def mock_start(request: Request):
 
 @app.post("/api/v1/mock/answer")
 async def mock_answer(request: Request):
-    """Process an answer in an active mock exam (returns next question or summary)."""
+    """Process an answer: grade it with LLM, record result, return next question."""
     body = await request.json()
-    # record_answer needs a budget — use a dummy one for this REST endpoint
-    from .llm_utils import LlmBudget
     budget = LlmBudget(max_calls=8)
     result = await _tutor_core_mod.mock_exam(
         action="answer",
         course_id=str(body.get("course_id") or ""),
         user_id=str(body.get("user_id") or ""),
         budget=budget,
+        correct=bool(body.get("correct")) if "correct" in body else None,
+        answer_text=str(body.get("answer_text") or "").strip(),
     )
     import json as _json
     data = _json.loads(result)
