@@ -195,6 +195,10 @@ body {
 .mock-question { background: var(--bg); border-radius: var(--radius); padding: 14px; margin-bottom: 12px; }
 .mock-question-num { font-size: 12px; font-weight: 700; color: var(--accent); margin-bottom: 6px; }
 .mock-question-text { font-size: 14px; margin-bottom: 10px; line-height: 1.6; }
+.quiz-option { padding: 10px 12px; border: 1.5px solid var(--rule); border-radius: 8px; margin-bottom: 8px; cursor: pointer; font-size: 13px; transition: border-color 0.15s, background 0.15s; }
+.quiz-option:hover { border-color: var(--accent); background: var(--bg); }
+.quiz-option.correct { border-color: var(--success); background: color-mix(in srgb, var(--success) 10%, transparent); color: var(--success); }
+.quiz-option.wrong { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); color: var(--danger); }
 
 /* ── Panel views ── */
 .panel-view { display: none; flex: 1; overflow-y: auto; }
