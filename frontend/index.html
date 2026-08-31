@@ -785,7 +785,6 @@ function submitAnswer() {
     const correct = selectedOption === currentQuestion.correct_answer;
     mockResults.push({ chunk_id: currentQuestion.chunk_id, correct });
     showFeedback(correct, correct ? '' : '正确答案：' + currentQuestion.correct_answer);
-    setTimeout(advanceQuestion, correct ? 1200 : 2000);
   } else {
     // Text question — send to LLM for grading
     const text = document.getElementById('quizTextAnswer')?.value.trim();
@@ -798,11 +797,11 @@ function submitAnswer() {
       course_id: COURSE_ID,
     }).then(data => {
       if (data.finished) { currentQuestion = data; renderMockQuestions(); return; }
-      const correct = data.grading_feedback === "" && mockResults[mockResults.length - 1]?.correct;
-      mockResults.push({ chunk_id: currentQuestion.chunk_id, correct });
-      const feedbackText = data.grading_feedback || (correct ? '正确！' : '错误');
-      showFeedback(correct, data.grading_feedback || (correct ? '' : '正确答案：' + (data.correct_answer || '')));
-      setTimeout(advanceQuestion, correct ? 1500 : 2500);
+      // LLM returns grading_feedback with the judgment
+      const isCorrect = data.grading_feedback && !data.grading_feedback.includes('错误') && !data.grading_feedback.includes('不正确');
+      mockResults.push({ chunk_id: currentQuestion.chunk_id, correct: isCorrect });
+      showFeedback(isCorrect, data.grading_feedback || (isCorrect ? '' : '正确答案：' + (data.correct_answer || '')));
+      btn.style.display = 'none';
     }).catch(e => {
       showToast('评判失败: ' + e.message);
       btn.disabled = false;
@@ -814,12 +813,19 @@ function submitAnswer() {
 function showFeedback(correct, extraText) {
   const feedback = document.getElementById('quizFeedback');
   if (!feedback) return;
+  const actions = document.getElementById('quizActions');
   feedback.style.display = '';
-  feedback.innerHTML = correct
-    ? '<span style="color:var(--success)">回答正确！</span>'
-    : `<span style="color:var(--danger)">${extraText || '回答错误'}</span>`;
-  const btn = document.getElementById('quizSubmit');
-  if (btn) btn.style.display = 'none';
+  if (correct) {
+    feedback.innerHTML = `<span style="color:var(--success)">回答正确！</span> ${extraText ? '<span style="color:var(--muted);margin-left:6px">'+extraText+'</span>' : ''}`;
+    if (actions) {
+      actions.innerHTML = `<button class="btn btn-primary" onclick="advanceQuestion()">下一题</button>`;
+      lucide.createIcons();
+    }
+  } else {
+    feedback.innerHTML = `<span style="color:var(--danger)">${extraText || '回答错误'}</span>`;
+    const btn = document.getElementById('quizSubmit');
+    if (btn) btn.disabled = true;
+  }
 }
 
 function skipQuestion() {
