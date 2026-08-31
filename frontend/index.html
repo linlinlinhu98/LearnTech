@@ -705,8 +705,9 @@ async function loadMastery() {
 }
 
 // ── Mock Exam ───────────────────────────────────────────────────
-let currentQuestion = null;  // {question, options, correct_answer, chunk_id, progress, lesson_title}
-let mockBusy = false;  // prevent double-submit / double-advance
+let currentQuestion = null;   // {question, options, correct_answer, chunk_id, progress, lesson_title}
+let pendingQuestion = null;   // next question already fetched by submitAnswer for text questions
+let mockBusy = false;         // prevent double-submit / double-advance
 
 async function startMock() {
   try {
@@ -791,28 +792,38 @@ function submitAnswer() {
   const hasOptions = (currentQuestion.options || []).length > 0;
 
   if (hasOptions) {
+    // Choice question — record locally, fetch next question from backend
     if (selectedOption === null) { showToast('请先选择一个选项'); return; }
     const correct = selectedOption === currentQuestion.correct_answer;
     mockResults.push({ chunk_id: currentQuestion.chunk_id, correct });
-    showFeedback(correct, correct ? '' : '正确答案：' + currentQuestion.correct_answer);
-    mockBusy = false; // already unlocked for next step
+    mockBusy = true;
+    api('/api/v1/mock/answer', {}).then(data => {
+      mockBusy = false;
+      if (data.finished) {
+        currentQuestion = data;
+        renderMockQuestions();
+        return;
+      }
+      pendingQuestion = data;
+      showFeedback(correct, correct ? '' : '正确答案：' + currentQuestion.correct_answer);
+    }).catch(e => {
+      mockBusy = false;
+      showToast('加载下一题失败: ' + e.message);
+    });
   } else {
-    // Text question — send to LLM for grading
+    // Text question — send to LLM for grading (which also returns next question)
     const text = document.getElementById('quizTextAnswer')?.value.trim();
     if (!text) { showToast('请先输入回答'); return; }
     const btn = document.getElementById('quizSubmit');
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner"></span>评判中...';
     mockBusy = true;
-    api('/api/v1/mock/answer', {
-      answer_text: text,
-      course_id: COURSE_ID,
-    }).then(data => {
+    api('/api/v1/mock/answer', { answer_text: text, course_id: COURSE_ID }).then(data => {
       mockBusy = false;
       if (data.finished) { currentQuestion = data; renderMockQuestions(); return; }
-      // LLM returns grading_feedback with the judgment
       const isCorrect = data.grading_feedback && !data.grading_feedback.includes('错误') && !data.grading_feedback.includes('不正确');
       mockResults.push({ chunk_id: currentQuestion.chunk_id, correct: isCorrect });
+      pendingQuestion = data;
       showFeedback(isCorrect, data.grading_feedback || (isCorrect ? '' : '正确答案：' + (data.correct_answer || '')));
       btn.style.display = 'none';
     }).catch(e => {
@@ -849,19 +860,15 @@ function skipQuestion() {
 
 async function advanceQuestion() {
   if (mockBusy) return;
-  selectedOption = null;
-  mockBusy = true;
-  try {
-    // Just fetch next question without recording a result (submitAnswer already recorded it)
-    const q = await api('/api/v1/mock/answer', {});
-    currentQuestion = q;
-    mockBusy = false;
-    renderMockQuestions();
-    loadUrgentReview();
-  } catch(e) {
-    mockBusy = false;
-    showToast('加载下一题失败: ' + e.message);
+  // Use the next question that submitAnswer already fetched
+  if (!pendingQuestion) {
+    showToast('题目加载异常，请刷新重试');
+    return;
   }
+  selectedOption = null;
+  currentQuestion = pendingQuestion;
+  pendingQuestion = null;
+  renderMockQuestions();
 }
 
 // ── Dashboard ───────────────────────────────────────────────────
