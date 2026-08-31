@@ -815,6 +815,7 @@ async def _grade_answer(
     correct_answer: str,
     question_type: str,
     budget: LlmBudget | None,
+    chunk_text: str = "",
 ) -> dict:
     """Use LLM to grade a learner's text answer. Returns {correct, feedback}."""
     if question_type == "single_choice" and correct_answer:
@@ -828,15 +829,17 @@ async def _grade_answer(
         "你是一位耐心的编程助教，对学生作业给出详细、有帮助的点评。\n"
         "填空题：学生填的内容是否与标准答案语义一致或等效（大小写/术语差异可接受）。\n"
         "简答题：学生是否理解了核心概念，解释是否基本正确（不需要完美，允许合理误差）。\n"
-        "回答为空或明显敷衍 → correct=false，feedback要批评这种行为。\n"
+        "回答为空或明显敷衍 → correct=false，feedback要批评这种行为并要求复习相关内容。\n"
         "回答正确 → feedback肯定优点并复述关键知识点。\n"
-        "回答错误 → feedback先指出错误点，然后清晰讲解正确答案，最后给出标准答案。\n"
+        "回答错误 → feedback先指出错误点，然后结合课程内容清晰讲解正确答案，最后给出标准答案。\n"
         "只输出JSON（无Markdown）：\n"
-        '{"correct": true或false, "feedback": "详细点评，100字以内"}'
+        '{"correct": true或false, "feedback": "详细点评，150字以内"}'
     )
+    chunk_section = f"课程内容：\n{chunk_text}\n\n" if chunk_text else ""
     user_msg = (
+        f"{chunk_section}"
         f"题目：{question}\n"
-        f"标准答案：{correct_answer}\n"
+        f"参考标准答案：{correct_answer or '（无固定答案，请根据课程内容判断）'}\n"
         f"学生回答：{answer_text}\n"
         f"题型：{question_type}\n"
         "请详细点评学生回答。"
@@ -881,12 +884,20 @@ async def _mock_answer(
     if answer_text and correct is None:
         if not _charge(budget):
             return json.dumps({"finished": True, "error": "LLM 预算已耗尽，无法评判回答。"}, ensure_ascii=False)
+        # Look up chunk text for the previous question
+        prev_chunk_id = session.get("last_question", {}).get("chunk_id", "")
+        chunk_text = ""
+        for ck, _ in knowledge_store._chunks:
+            if ck.id == prev_chunk_id:
+                chunk_text = ck.text[:600]
+                break
         grading_result = await _grade_answer(
             answer_text=answer_text,
             question=session.get("last_question", {}).get("question", ""),
             correct_answer=session.get("last_question", {}).get("correct_answer", ""),
             question_type=session.get("last_question", {}).get("question_type", "short_answer"),
             budget=budget,
+            chunk_text=chunk_text,
         )
         correct = grading_result["correct"]
         grading_feedback = grading_result.get("feedback", "")
