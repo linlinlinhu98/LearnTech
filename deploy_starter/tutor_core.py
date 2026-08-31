@@ -824,49 +824,72 @@ async def _grade_answer(
         correct = first_char == correct_answer.upper()[0]
         return {"correct": correct, "feedback": ""}
 
-    # For fill_blank and short_answer, use LLM to judge
-    system_msg = (
-        "你是一位耐心的编程助教。请判断学生回答并给出详细点评。\n"
-        "【判断标准】\n"
-        "填空题：学生填的内容是否与标准答案语义一致或等效（大小写/术语差异可接受） → 判定：正确\n"
-        "简答题：学生是否理解核心概念，解释基本正确（允许合理误差，不要求完美） → 判定：正确\n"
-        "学生回答为空、只写'不知道'、明显敷衍 → 判定：错误\n"
-        "学生回答与正确答案主题完全无关 → 判定：错误\n"
-        "【输出格式 - 严格按此顺序输出4部分，每部分独立成段】\n"
-        "第一段：判断依据（说明为什么判定正确或错误，1-2句）\n"
-        "第二段：知识点讲解（结合课程内容详细讲解本题涉及的核心概念，4-6句）\n"
-        "第三段：标准答案（直接给出本题的标准答案或参考答案，1-2句）\n"
-        "第四段：判定结果：正确  或  判定结果：错误\n"
-        "【重要】第三段标准答案必须填写，即使学生回答正确也要写。\n"
-        "每部分都要有实质内容，不要省略。"
+    # For fill_blank and short_answer, use LLM to judge — two-step: judge first, then explain if wrong
+    judge_msg = (
+        "你是一位严格的编程助教。请判断学生回答是否正确。\n"
+        "填空题：学生填的内容是否与标准答案语义一致或等效（大小写/术语差异可接受） → 回答：正确\n"
+        "简答题：学生是否理解核心概念，解释基本正确（允许合理误差，不要求完美） → 回答：正确\n"
+        "学生回答为空、只写'不知道'、明显敷衍 → 回答：错误\n"
+        "学生回答与正确答案主题完全无关 → 回答：错误\n"
+        "只输出一个字：正确  或  错误"
     )
     chunk_section = f"【课程内容】\n{chunk_text}\n\n" if chunk_text else ""
-    user_msg = (
+    judge_user = (
         f"{chunk_section}"
         f"【题目】{question}\n"
-        f"【题型】{question_type}\n"
-        f"【参考标准答案】{correct_answer or '（无固定标准答案，请根据课程内容判断）'}\n"
         f"【学生回答】{answer_text}\n"
+        "请只输出“正确”或“错误”，不要输出其他内容。"
     )
 
     try:
         from llm_utils import chat_completion
         raw = await chat_completion(
-            [{"role": "system", "content": system_msg}, {"role": "user", "content": user_msg}],
-            temperature=0.2,
-            max_tokens=2048,
+            [{"role": "system", "content": judge_msg}, {"role": "user", "content": judge_user}],
+            temperature=0.1,
+            max_tokens=50,
         )
-        text = raw.strip()
-        # Parse: last line contains "判定结果：正确" or "判定结果：错误"
-        lines = text.splitlines()
-        is_correct = any("判定结果：正确" in l for l in lines)
-        # Feedback = everything except the last judgment line
-        feedback_parts = [l for l in lines if "判定结果：" not in l]
-        feedback = "\n".join(feedback_parts).strip()
-        return {"correct": is_correct, "feedback": feedback[:1000]}
+        is_correct = "正确" in raw and "错误" not in raw
     except Exception:
-        pass
-    # Fallback: mark wrong if we can't grade
+        is_correct = False
+
+    # If wrong, generate detailed feedback with standard answer (second LLM call)
+    if not is_correct:
+        explain_msg = (
+            "你是一位耐心的编程助教。学生回答错误或敷衍，请你给出详细讲解。\n"
+            "【输出格式 - 必须严格按以下4部分输出，每部分独立成段】\n"
+            "第一段：指出问题（说明学生回答哪里不对或为什么敷衍，1-2句）\n"
+            "第二段：知识点讲解（结合课程内容详细讲解本题涉及的核心概念，4-6句）\n"
+            "第三段：标准答案（直接给出本题的完整标准答案，2-4句，要完整不要省略）\n"
+            "第四段：判定结果：错误\n"
+            "【重要】第三段必须完整写出标准答案，不能省略。\n"
+            "总字数不少于200字。"
+        )
+        explain_user = (
+            f"{chunk_section}"
+            f"【题目】{question}\n"
+            f"【题型】{question_type}\n"
+            f"【学生刚才的回答】{answer_text}\n"
+        )
+        try:
+            raw = await chat_completion(
+                [{"role": "system", "content": explain_msg}, {"role": "user", "content": explain_user}],
+                temperature=0.1,
+                max_tokens=2048,
+            )
+            feedback = raw.strip()
+            # Remove the last judgment line from feedback
+            lines = feedback.splitlines()
+            feedback = "\n".join([l for l in lines if "判定结果：" not in l]).strip()
+            return {"correct": False, "feedback": feedback[:1000]}
+        except Exception:
+            pass
+
+    if is_correct:
+        return {
+            "correct": True,
+            "feedback": "回答正确！扎实地掌握了本题的核心知识点，继续加油！",
+        }
+    # Fallback
     return {"correct": False, "feedback": "（自动评判不可用，请自行核对答案）"}
 
 
