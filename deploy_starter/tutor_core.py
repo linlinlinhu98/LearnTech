@@ -825,18 +825,21 @@ async def _grade_answer(
 
     # For fill_blank and short_answer, use LLM to judge
     system_msg = (
-        "你是一位严格的编程助教。请判断学生的回答是否正确。\n"
+        "你是一位耐心的编程助教，对学生作业给出详细、有帮助的点评。\n"
         "填空题：学生填的内容是否与标准答案语义一致或等效（大小写/术语差异可接受）。\n"
         "简答题：学生是否理解了核心概念，解释是否基本正确（不需要完美，允许合理误差）。\n"
+        "回答为空或明显敷衍 → correct=false，feedback要批评这种行为。\n"
+        "回答正确 → feedback肯定优点并复述关键知识点。\n"
+        "回答错误 → feedback先指出错误点，然后清晰讲解正确答案，最后给出标准答案。\n"
         "只输出JSON（无Markdown）：\n"
-        '{"correct": true或false, "feedback": "1-2句话的点评，指出问题或肯定优点"}'
+        '{"correct": true或false, "feedback": "详细点评，100字以内"}'
     )
     user_msg = (
         f"题目：{question}\n"
-        f"标准答案（参考）：{correct_answer}\n"
+        f"标准答案：{correct_answer}\n"
         f"学生回答：{answer_text}\n"
         f"题型：{question_type}\n"
-        "请判断学生回答是否正确，并给出简短点评。"
+        "请详细点评学生回答。"
     )
 
     try:
@@ -1022,6 +1025,7 @@ async def _mock_answer(
         "chunk_id": chunk_id,
         "note": "请作答，系统会自动记录。",
         "grading_feedback": grading_feedback if idx > 0 else "",
+        "grading_correct": correct if idx > 0 else None,
     }, ensure_ascii=False)
 
 

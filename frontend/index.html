@@ -822,7 +822,7 @@ function submitAnswer() {
     api('/api/v1/mock/answer', { answer_text: text, course_id: COURSE_ID }).then(data => {
       mockBusy = false;
       if (data.finished) { currentQuestion = data; renderMockQuestions(); return; }
-      const isCorrect = data.grading_feedback && !data.grading_feedback.includes('错误') && !data.grading_feedback.includes('不正确');
+      const isCorrect = data.grading_correct === true;
       mockResults.push({ chunk_id: currentQuestion.chunk_id, correct: isCorrect });
       pendingQuestion = data;
       showFeedback(isCorrect, data.grading_feedback || (isCorrect ? '' : '正确答案：' + (data.correct_answer || '')));
