@@ -713,7 +713,6 @@ async function startMock() {
     document.getElementById('mockStartBtn').innerHTML = '<span class="spinner"></span>选题中...';
     const data = await api('/api/v1/mock/start', {});
     mockTopics = data.topics || [];
-    mockIndex = 0;
     mockResults = [];
     currentQuestion = null;
     // Fetch first question
@@ -768,7 +767,6 @@ function renderMockQuestions() {
   if (hasOptions) {
     document.getElementById('quizSubmit').style.display = '';
   }
-  mockIndex++;
   lucide.createIcons();
 }
 
@@ -840,7 +838,8 @@ function skipQuestion() {
 async function advanceQuestion() {
   selectedOption = null;
   try {
-    const q = await api('/api/v1/mock/answer', { correct: mockResults[mockResults.length - 1]?.correct });
+    // Just fetch next question without recording a result (submitAnswer already recorded it)
+    const q = await api('/api/v1/mock/answer', {});
     currentQuestion = q;
     renderMockQuestions();
     loadUrgentReview();
