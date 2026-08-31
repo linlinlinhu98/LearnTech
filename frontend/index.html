@@ -706,6 +706,7 @@ async function loadMastery() {
 
 // ── Mock Exam ───────────────────────────────────────────────────
 let currentQuestion = null;  // {question, options, correct_answer, chunk_id, progress, lesson_title}
+let mockBusy = false;  // prevent double-submit / double-advance
 
 async function startMock() {
   try {
@@ -742,7 +743,14 @@ function renderMockQuestions() {
   }
 
   const q = currentQuestion;
-  const progress = q.progress || `${mockIndex + 1}/${mockTopics.length}`;
+  // Guard: if question text is missing or blank, show error instead of empty form
+  if (!q.question || !q.question.trim()) {
+    el.innerHTML = `<div style="padding:16px;text-align:center;color:var(--danger)">题目加载失败，请刷新重试。</div>
+      <button class="btn btn-secondary" onclick="startMock()" style="margin-top:12px">重新开始模考</button>`;
+    lucide.createIcons();
+    return;
+  }
+  const progress = q.progress;
   const opts = (q.options || []).map((opt, i) =>
     `<div class="quiz-option" onclick="selectOption(this, '${opt[0]}')">${opt}</div>`
   ).join('');
@@ -779,7 +787,7 @@ function selectOption(el, optionLetter) {
 }
 
 function submitAnswer() {
-  if (!currentQuestion) return;
+  if (!currentQuestion || mockBusy) return;
   const hasOptions = (currentQuestion.options || []).length > 0;
 
   if (hasOptions) {
@@ -787,6 +795,7 @@ function submitAnswer() {
     const correct = selectedOption === currentQuestion.correct_answer;
     mockResults.push({ chunk_id: currentQuestion.chunk_id, correct });
     showFeedback(correct, correct ? '' : '正确答案：' + currentQuestion.correct_answer);
+    mockBusy = false; // already unlocked for next step
   } else {
     // Text question — send to LLM for grading
     const text = document.getElementById('quizTextAnswer')?.value.trim();
@@ -794,10 +803,12 @@ function submitAnswer() {
     const btn = document.getElementById('quizSubmit');
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner"></span>评判中...';
+    mockBusy = true;
     api('/api/v1/mock/answer', {
       answer_text: text,
       course_id: COURSE_ID,
     }).then(data => {
+      mockBusy = false;
       if (data.finished) { currentQuestion = data; renderMockQuestions(); return; }
       // LLM returns grading_feedback with the judgment
       const isCorrect = data.grading_feedback && !data.grading_feedback.includes('错误') && !data.grading_feedback.includes('不正确');
@@ -805,6 +816,7 @@ function submitAnswer() {
       showFeedback(isCorrect, data.grading_feedback || (isCorrect ? '' : '正确答案：' + (data.correct_answer || '')));
       btn.style.display = 'none';
     }).catch(e => {
+      mockBusy = false;
       showToast('评判失败: ' + e.message);
       btn.disabled = false;
       btn.textContent = '提交答案';
@@ -836,14 +848,18 @@ function skipQuestion() {
 }
 
 async function advanceQuestion() {
+  if (mockBusy) return;
   selectedOption = null;
+  mockBusy = true;
   try {
     // Just fetch next question without recording a result (submitAnswer already recorded it)
     const q = await api('/api/v1/mock/answer', {});
     currentQuestion = q;
+    mockBusy = false;
     renderMockQuestions();
     loadUrgentReview();
   } catch(e) {
+    mockBusy = false;
     showToast('加载下一题失败: ' + e.message);
   }
 }
