@@ -717,6 +717,7 @@ async function startMock() {
     mockTopics = data.topics || [];
     mockResults = [];
     currentQuestion = null;
+    pendingQuestion = null;
     // Fetch first question
     const q = await api('/api/v1/mock/answer', { correct: null });
     currentQuestion = q;
