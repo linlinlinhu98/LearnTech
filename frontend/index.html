@@ -855,8 +855,24 @@ function showFeedback(correct, extraText) {
 }
 
 function skipQuestion() {
+  if (mockBusy) return;
   mockResults.push({ chunk_id: currentQuestion?.chunk_id, correct: false });
-  advanceQuestion();
+  mockBusy = true;
+  api('/api/v1/mock/answer', {}).then(data => {
+    mockBusy = false;
+    if (data.finished) {
+      currentQuestion = data;
+      pendingQuestion = null;
+      renderMockQuestions();
+      return;
+    }
+    pendingQuestion = data;
+    currentQuestion = data;
+    renderMockQuestions();
+  }).catch(e => {
+    mockBusy = false;
+    showToast('加载下一题失败: ' + e.message);
+  });
 }
 
 async function advanceQuestion() {
