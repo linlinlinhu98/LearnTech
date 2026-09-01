@@ -793,21 +793,28 @@ function submitAnswer() {
   const hasOptions = (currentQuestion.options || []).length > 0;
 
   if (hasOptions) {
-    // Choice question — record locally, fetch next question from backend
+    // Choice question — fetch next question from backend (backend records result)
     if (selectedOption === null) { showToast('请先选择一个选项'); return; }
     const correct = selectedOption === currentQuestion.correct_answer;
     mockResults.push({ chunk_id: currentQuestion.chunk_id, correct });
     mockBusy = true;
     api('/api/v1/mock/answer', {}).then(data => {
       mockBusy = false;
-      currentQuestion = data;
-      renderMockQuestions();
+      if (data.finished || data.error) {
+        currentQuestion = data;
+        renderMockQuestions();
+        return;
+      }
+      // Store next question and show "下一题" button
+      pendingQuestion = data;
+      showFeedback(correct, correct ? '' : '正确答案：' + currentQuestion.correct_answer);
+      showNextButton();
     }).catch(e => {
       mockBusy = false;
-      showToast('加载下一题失败: ' + e.message);
+      showToast('加载失败: ' + e.message);
     });
   } else {
-    // Text question — send to LLM for grading (which also returns next question)
+    // Text question — LLM grades and returns next question
     const text = document.getElementById('quizTextAnswer')?.value.trim();
     if (!text) { showToast('请先输入回答'); return; }
     const btn = document.getElementById('quizSubmit');
@@ -816,14 +823,16 @@ function submitAnswer() {
     mockBusy = true;
     api('/api/v1/mock/answer', { answer_text: text, course_id: COURSE_ID }).then(data => {
       mockBusy = false;
-      const isCorrect = data.grading_correct === true;
-      mockResults.push({ chunk_id: currentQuestion.chunk_id, correct: isCorrect });
-      showFeedback(isCorrect, data.grading_feedback || (isCorrect ? '' : '正确答案：' + (data.correct_answer || '')));
-      btn.style.display = 'none';
-      setTimeout(() => {
+      if (data.finished || data.error) {
         currentQuestion = data;
         renderMockQuestions();
-      }, 3000);
+        return;
+      }
+      const isCorrect = data.grading_correct === true;
+      mockResults.push({ chunk_id: currentQuestion.chunk_id, correct: isCorrect });
+      pendingQuestion = data;
+      showFeedback(isCorrect, data.grading_feedback || (isCorrect ? '' : '正确答案：' + (data.correct_answer || '')));
+      showNextButton();
     }).catch(e => {
       mockBusy = false;
       showToast('评判失败: ' + e.message);
@@ -833,17 +842,29 @@ function submitAnswer() {
   }
 }
 
+function showNextButton() {
+  const actions = document.getElementById('quizActions');
+  if (!actions) return;
+  actions.innerHTML = `<button class="btn btn-primary" onclick="advanceQuestion()">下一题</button>`;
+  lucide.createIcons();
+}
+
+function advanceQuestion() {
+  // Show the question that was already fetched by submitAnswer
+  if (!pendingQuestion || mockBusy) return;
+  selectedOption = null;
+  currentQuestion = pendingQuestion;
+  pendingQuestion = null;
+  renderMockQuestions();
+}
+
 function showFeedback(correct, extraText) {
   const feedback = document.getElementById('quizFeedback');
   if (!feedback) return;
   feedback.style.display = '';
-  if (correct) {
-    feedback.innerHTML = `<span style="color:var(--success)">回答正确！</span> ${extraText ? '<span style="color:var(--muted);margin-left:6px">'+extraText+'</span>' : ''}`;
-  } else {
-    feedback.innerHTML = `<span style="color:var(--danger)">${extraText || '回答错误'}</span>`;
-    const btn = document.getElementById('quizSubmit');
-    if (btn) btn.disabled = true;
-  }
+  feedback.innerHTML = correct
+    ? `<span style="color:var(--success)">回答正确！</span>${extraText ? ' <span style="color:var(--muted);margin-left:6px">'+extraText+'</span>' : ''}`
+    : `<span style="color:var(--danger)">${extraText || '回答错误'}</span>`;
 }
 
 function skipQuestion() {
@@ -852,11 +873,13 @@ function skipQuestion() {
   mockBusy = true;
   api('/api/v1/mock/answer', {}).then(data => {
     mockBusy = false;
+    selectedOption = null;
     currentQuestion = data;
+    pendingQuestion = null;
     renderMockQuestions();
   }).catch(e => {
     mockBusy = false;
-    showToast('加载下一题失败: ' + e.message);
+    showToast('加载失败: ' + e.message);
   });
 }
 
