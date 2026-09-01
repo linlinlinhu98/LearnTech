@@ -1,336 +1,353 @@
-# Lumen-Bailian 对话调试案例
+# Lumen 测试案例
 
-Demo 知识库：**Python 数据分析入门**（9 课时：变量、列表字典、控制流、NumPy基础、NumPy广播、Pandas数据结构、Pandas清洗、Matplotlib绘图、可视化实践）
-
----
-
-## 案例 1：课程内容检索（RAG 核心流程）
-
-**目的**：验证 tool_retrieve → 检索 → 标注引用 的完整链路
-
-```
-用户：Python 中可变类型和不可变类型有什么区别？
-```
-
-**预期行为**：
-
-1. Agent 调用 `tool_retrieve` 检索 "可变类型和不可变类型"
-2. 返回结果应包含 [参考1] 标注（来自 L001 Python变量与数据类型）
-3. 回答应包含：int/str/tuple 不可变，list/dict/set 可变，以及代码示例
-
-**检查点**：响应是否包含 `[参考N]` 引用标记？内容是否与 L001 一致？
+> 基础 URL：`http://<your-server>:3000`
+> 所有请求需要 `Content-Type: application/json`
+> user_id 统一用 `test_user`，course_id 用空字符串代表通用课程
 
 ---
 
-## 案例 2：概念深度讲解
+## 模块一：知识库与文件上传
 
-**目的**：验证 tool_explain_concept 的分层讲解结构
-
-```
-用户：什么是 NumPy 的广播机制？我刚开始学，请用简单的方式解释。
-```
-
-**预期行为**：
-
-1. Agent 先调用 `tool_retrieve` 检索相关知识
-2. Agent 调用 `tool_explain_concept(concept="NumPy广播机制", level="beginner")`
-3. 回答结构应为：一句话总结 → 生活类比 → 深入细节 → 关键要点
-
-**检查点**：回答是否包含四层结构？类比是否贴近生活？
-
----
-
-## 案例 3：练习测验生成
-
-**目的**：验证 tool_generate_quiz 功能
-
-```
-用户：我刚学完 Pandas 的 DataFrame，帮我出几道题测试一下。
-```
-
-**预期行为**：
-
-1. Agent 调用 `tool_retrieve` 检索 Pandas 相关内容
-2. Agent 调用 `tool_generate_quiz(topic="Pandas DataFrame", difficulty="medium")`
-3. 返回选择题、判断题、简答题各一，含答案解析
-
-**检查点**：是否生成了 3 种题型的题目？是否包含解析？
-
----
-
-## 案例 4：多工具协同
-
-**目的**：验证单轮对话中多个工具的调用
-
-```
-用户：我想复习一下列表和字典的知识，然后给我出两道相关的练习题。
-```
-
-**预期行为**：
-
-1. Agent 调用 `tool_retrieve` 检索列表和字典内容
-2. Agent 输出检索结果（含引用标注）
-3. Agent 调用 `tool_generate_quiz(topic="Python列表和字典")`
-4. 返回对应练习题
-
-**检查点**：同一条消息是否先后触发了 search + quiz 两个工具？
-
----
-
-## 案例 5：超出知识库范围
-
-**目的**：验证知识库无匹配时的降级处理
-
-```
-用户：请给我讲讲 Rust 的所有权系统。
-```
-
-**预期行为**：
-
-1. Agent 调用 `tool_retrieve`，检索结果为空或无高相关度结果
-2. Agent 应诚实告知当前课程资料无法覆盖此问题
-3. 不应编造内容
-
-**检查点**：Agent 是否诚实承认知识不足？是否给出了有用建议（换个角度、查其他资料）？
-
----
-
-## 案例 6：混合中英文提问
-
-**目的**：验证中英混合场景
-
-```
-用户：How to use df.groupby() in Pandas? 请用中文解释。
-```
-
-**预期行为**：
-
-1. Agent 调用 `tool_retrieve` 检索 groupby 相关内容
-2. 检索到 L007（Pandas数据清洗与处理，含 groupby 示例）
-3. 用中文回答，代码保持英文
-
-**检查点**：是否能跨语言检索？回答语言是否与用户最后指定的一致？
-
----
-
-## 案例 7：连续对话（Session 记忆）
-
-**目的**：验证多轮对话中 Session 记忆是否正常
-
-```
-第1轮：Python 数据分析常用的库有哪些？
-第2轮：你刚才提到的 NumPy，它的数组和 Python 原生的列表有什么不同？
-第3轮：给我两个 NumPy 数组运算的例子。
-```
-
-**预期行为**：
-
-- 第2轮应能引用第1轮提到的库名
-- 第3轮应能承接第2轮的上下文
-- 每轮涉及课程内容时应检索知识库
-
-**检查点**：后续轮次是否记住了前文的对话上下文？
-
----
-
-## 案例 8：知识库管理 API 测试
-
-**目的**：验证 /api/v1/knowledge/* 端点
-
+### TC-1.1 统计知识库状态
 ```bash
-# 8a. 查看知识库状态
-curl -X POST http://<HOST>:<PORT>/api/v1/knowledge/stats
-# 预期：{"code":200, "data":{"total_chunks":9, ...}}
-
-# 8b. 语义搜索
-curl -X POST http://<HOST>:<PORT>/api/v1/knowledge/search \
-  -H "Content-Type: application/json" \
-  -d '{"query":"数据清洗","top_k":3}'
-# 预期：返回 L007 相关 chunk，similarity_score 降序
-
-# 8c. 注入新知识
-curl -X POST http://<HOST>:<PORT>/api/v1/knowledge/ingest \
-  -H "Content-Type: application/json" \
-  -d '{"course_title":"测试课程","chunks":[{"lesson_id":"T01","lesson_title":"测试章节","text":"这是一段测试内容，用于验证知识注入功能是否正常。"}]}'
-# 预期：chunks_ingested=1, total_chunks 增加1
-
-# 8d. 验证注入后检索
-curl -X POST http://<HOST>:<PORT>/api/v1/knowledge/search \
-  -H "Content-Type: application/json" \
-  -d '{"query":"测试内容","top_k":3}'
-# 预期：能检索到刚注入的 T01 chunk
+curl -X POST http://localhost:3000/api/v1/knowledge/stats \
+  --json '{"user_id": "test_user", "course_id": ""}'
 ```
+**预期**：返回 `total_chunks`、`courses` 等统计信息，demo 课程有 9 个 chunk
 
 ---
 
-## 案例 9：会话管理
-
-**目的**：验证 Bailian 标准端点
-
+### TC-1.2 检索课程内容
 ```bash
-# 9a. 创建会话
-curl -X POST http://<HOST>:<PORT>/createSession \
-  -H "Content-Type: application/json" \
-  -d '{}'
-# 预期：{"uniqueCode":"<uuid>","code":200,"message":"success","data":null,"host":"<ip>"}
-
-# 9b. 健康检查
-curl http://<HOST>:<PORT>/health
-# 预期："OK"
-
-# 9c. 根路径
-curl http://<HOST>:<PORT>/
-# 预期：{"name":"Lumen-Bailian","status":"running"}
+curl -X POST http://localhost:3000/api/v1/knowledge/search \
+  --json '{
+    "query": "Python 列表有哪些常用操作",
+    "user_id": "test_user",
+    "course_id": "",
+    "top_k": 3
+  }'
 ```
+**预期**：返回相关 chunk 列表，每个结果含 `ref`、`lesson_title`、`text`（截断 500 字）、`similarity`
 
 ---
 
-## 调试优先级
+### TC-1.3 上传 Markdown 文件并导入
+```bash
+curl -X POST http://localhost:3000/api/v1/knowledge/upload \
+  --json '{
+    "filename": "python基础.md",
+    "content": "'"$(base64 -w0 << 'EOF'
+# Python 基础
 
-| 优先级 | 案例  | 验证的核心能力                   |
-| ------ | ----- | -------------------------------- |
-| P0     | 案例1 | RAG检索 + 引用标注（Lumen 核心） |
-| P0     | 案例3 | Quiz工具调用                     |
-| P1     | 案例2 | 分层讲解结构                     |
-| P1     | 案例4 | 多工具协同                       |
-| P1     | 案例7 | Session 记忆                     |
-| P2     | 案例5 | 边界情况处理                     |
-| P2     | 案例8 | API 端点                         |
-| P2     | 案例6 | 多语言场景                       |
+## 变量与数据类型
+Python 中变量无需声明类型，常见类型有：int、float、str、bool、list、dict、set。
+
+## 列表操作
+- append(elem): 在末尾添加元素
+- extend(iterable): 批量添加
+- insert(i, elem): 在位置 i 插入
+- remove(elem): 移除第一个匹配项
+- pop(i): 弹出并返回位置 i 的元素，默认最后一位
+
+## 字典操作
+- dict.keys(): 返回所有键
+- dict.values(): 返回所有值
+- dict.items(): 返回键值对
+- dict.get(key, default): 安全获取，键不存在返回 default
+EOF
+)"'",
+    "course_id": "",
+    "course_title": "Python 基础知识"
+  }'
+```
+**预期**：返回 `chunks_ingested`（>0 表示成功）
 
 ---
 
-## 模块三：多智能体辅导调度
+## 模块二：学习目标引导（Intake）
 
-### 案例 10：核心调度器（REST 端点）
-
-**目的**：验证 `/api/v1/tutor/ask` 的 plan→execute→synthesize 全链路 + 预算约束
-
+### TC-2.1 启动学习目标引导
 ```bash
-curl -X POST http://<HOST>:<PORT>/api/v1/tutor/ask \
-  -H "Content-Type: application/json" \
-  -d '{"question":"Python 中列表和字典有什么区别？","user_id":"u1"}'
+curl -X POST http://localhost:3000/api/v1/intake/start \
+  --json '{"user_id": "test_user"}'
 ```
-
-**预期行为**：
-
-1. 返回 `code=200`，`data` 含 `answer`、`evidence`、`iterations`、`llm_calls`
-2. 调度器先规划（plan）调用 `retrieve`，执行后综合（synthesize）回答
-3. `llm_calls <= 8`（MAX_DISPATCH_LLM_CALLS），`iterations <= 5`（MAX_DISPATCH_ITERATIONS）
-4. 回答引用课程内容时带 `[参考N]` 标注
-
-**检查点**：`data.llm_calls` 是否 ≤ 8？`data.iterations` 是否 ≤ 5？回答是否含引用？
-
-### 案例 11：代码执行子代理
-
-**目的**：验证 `tool_run_code` 沙箱真实执行 + 危险模块封禁
-
-```
-用户：帮我算一下 1 加到 100 的和，用 Python 代码。
-```
-
-**预期行为**：
-
-1. Agent 调用 `tool_run_code`，传入 `print(sum(range(1,101)))`
-2. 返回 `stdout=5050`、`exit_code=0`
-
-```
-用户：帮我看看这台机器的当前目录有哪些文件，用 os.listdir()。
-```
-
-**预期行为**：`tool_run_code` 返回 `success=false`，stderr 含 `not allowed`（os 被白名单封禁）
-
-**检查点**：算术代码真实执行成功？`import os` 被拦截？
-
-### 案例 12：预算硬约束（本地单测）
-
-**目的**：验证调度器在 LLM 预算耗尽时不超发
-
-```bash
-cd lumen-bailian && python tests/test_module3.py
-```
-
-**预期行为**：10 个用例全部 `OK`，覆盖：代码沙箱（执行/封禁/超时）、LlmBudget 计数、调度器迭代上限、提前 finalize、预算预留综合器、预算耗尽回退、RAG 检索。
-
-**检查点**：`Ran 10 tests ... OK`
-
-### 案例 13：辅导聊天全链路（五工具）
-
-**目的**：验证协调 Agent 聊天路径下五工具可用
-
-```
-第1轮：什么是 NumPy 广播机制？
-第2轮：给我出两道关于它的练习题。
-第3轮：用代码演示一下广播。
-```
-
-**预期行为**：
-
-1. 第1轮调用 `tool_retrieve` + `tool_explain_concept`
-2. 第2轮调用 `tool_generate_quiz`
-3. 第3轮调用 `tool_run_code`（代码演示）
-
-**检查点**：三个工具是否按需触发？`tool_web_search` 是否在课程无法覆盖时被触发？
-
-> **联网搜索已接入真搜索（Tavily）**：`tool_web_search` 不再是 LLM 内部知识兜底，而是调用
-> Tavily 搜索 API（`POST https://api.tavily.com/search`），返回答案 + 来源链接，**不占用 LLM
-> 调用预算**。需在 `deploy_starter/config.yml` 填入 `TAVILY_API_KEY`（免费注册
-> https://app.tavily.com）。未填 key 时 `search_web` 返回提示文案（不报错、不影响其余子代理）。
+**预期**：返回引导问题（如"你的学习目标是什么？"）
 
 ---
 
-## 本地 HTTP 服务全链路（无 AgentScope 运行时）
-
-百炼平台用 `main.py`（AgentScope ReActAgent + 运行时引擎，AgentScope v1.0.11）。本地安装的是
-AgentScope v2.x，缺少 `agentscope.agent.ReActAgent`，因此 `main.py` 无法在本地启动。为此提供
-`local_server.py`：用 FastAPI + 无 AgentScope 依赖的 `TutorDispatcher` / `tutor_core` 镜像同样的
-端点，`/process/sync` 自动降级到调度器（同一个五工具 + plan→execute→synthesize）。
-
-### 案例 14：本地起服务 + HTTP 全链路
-
+### TC-2.2 引导轮次交互
 ```bash
-cd lumen-bailian/deploy_starter
-python local_server.py            # http://127.0.0.1:8080
+# 第1轮：回答学习目标
+curl -X POST http://localhost:3000/api/v1/intake/respond \
+  --json '{"user_id": "test_user", "message": "我想学习 Python 数据分析"}'
+
+# 第2轮：回答当前水平
+curl -X POST http://localhost:3000/api/v1/intake/respond \
+  --json '{"user_id": "test_user", "message": "有一些 Python 基础，熟悉基本语法"}'
+
+# 第3轮：回答目标水平
+curl -X POST http://localhost:3000/api/v1/intake/respond \
+  --json '{"user_id": "test_user", "message": "能够独立完成数据分析项目"}'
 ```
+**预期**：每轮返回下一个问题；所有字段收集完毕后返回 `state: "CONFIRMED"` 和 `learning_brief`
 
-**预期行为**：
+---
 
+### TC-2.3 查看引导状态
 ```bash
-# 14a. 健康检查
-curl http://127.0.0.1:8080/health
-# 预期："OK"
-
-# 14b. 知识库状态（启动时自动 seed 9 条 demo 数据）
-curl -X POST http://127.0.0.1:8080/api/v1/knowledge/stats
-# 预期：total_chunks=9, embedding_dim=2048
-
-# 14c. 语义检索
-curl -X POST http://127.0.0.1:8080/api/v1/knowledge/search \
-  -H "Content-Type: application/json" -d '{"query":"数据清洗","top_k":3}'
-# 预期：L007 Pandas 数据清洗与处理 排在首位
-
-# 14d. 知识注入
-curl -X POST http://127.0.0.1:8080/api/v1/knowledge/ingest \
-  -H "Content-Type: application/json" \
-  -d '{"course_title":"测试课","chunks":[{"lesson_id":"T01","lesson_title":"测试章节","text":"用于验证注入的测试内容。"}]}'
-# 预期：chunks_ingested=1, total_chunks 增加 1
-
-# 14e. 多智能体调度（REST）
-curl -X POST http://127.0.0.1:8080/api/v1/tutor/ask \
-  -H "Content-Type: application/json" \
-  -d '{"question":"Python 中列表和字典有什么区别？","user_id":"u1"}'
-# 预期：data.llm_calls <= 8，data.iterations <= 5，回答带 [参考N] 引用
-
-# 14f. 聊天路径（ReActAgent 降级为调度器）
-curl -X POST http://127.0.0.1:8080/process/sync \
-  -H "Content-Type: application/json" \
-  -d '{"session_id":"s1","user_id":"u1","messages":[{"role":"user","content":"什么是 NumPy 广播机制？"}]}'
-# 预期：同 14e，走 TutorDispatcher
+curl -X POST http://localhost:3000/api/v1/intake/status \
+  --json '{"user_id": "test_user"}'
 ```
+**预期**：返回当前轮次、已收集字段、状态
 
-**检查点**：六个端点均返回 HTTP 200；`tutor/ask` 与 `process/sync` 的 `data.llm_calls ≤ 8`、
-`data.iterations ≤ 5`、`data.evidence` 非空（实际调用了子代理）。
+---
 
-> **Windows curl 中文编码注意**：Windows Git Bash 的 curl 会把中文按 GBK 编码发出，服务端按
-> UTF-8 解析会报 `UnicodeDecodeError`（表现为 500）。真实客户端（浏览器 / Python / Postman）
-> 都是 UTF-8，无此问题。curl 测中文时用 `curl -d @body.json`（body.json 存 UTF-8）或改用英文查询。
+### TC-2.4 取消引导
+```bash
+curl -X POST http://localhost:3000/api/v1/intake/cancel \
+  --json '{"user_id": "test_user"}'
+```
+**预期**：返回 `state: "CANCELLED"`
+
+---
+
+## 模块三：课程生成
+
+### TC-3.1 根据目标生成课程
+```bash
+curl -X POST http://localhost:3000/api/v1/courses/generate \
+  --json '{
+    "user_id": "test_user",
+    "goal": "学习 Python 数据分析，主要使用 Pandas 和 NumPy",
+    "current_level": "有 Python 基础",
+    "target_level": "能够独立完成数据分析项目"
+  }'
+```
+**预期**：返回 `course_id`、`course_title`、生成课程内容摘要（6 阶段流水线执行，结果较长）
+
+---
+
+### TC-3.2 列出所有课程
+```bash
+curl -X POST http://localhost:3000/api/v1/courses/list \
+  --json '{"user_id": "test_user"}'
+```
+**预期**：返回可见课程列表（含 demo 课程和用户生成的课程）
+
+---
+
+## 模块四：自适应模考
+
+### TC-4.1 启动模考
+```bash
+curl -X POST http://localhost:3000/api/v1/mock/start \
+  --json '{"user_id": "test_user", "course_id": ""}'
+```
+**预期**：返回 `started: true`、`topics`（9 个lesson标题）、`total: 9`
+
+---
+
+### TC-4.2 选择题答题（直接判对错）
+```bash
+# 先获取第一道题（选择题）
+curl -X POST http://localhost:3000/api/v1/mock/answer \
+  --json '{"correct": true, "course_id": ""}'
+
+# 答错
+curl -X POST http://localhost:3000/api/v1/mock/answer \
+  --json '{"correct": false, "course_id": ""}'
+```
+**预期**：返回下一道题，含 `progress`（如 "2/9"）、`lesson_title`、`options`
+
+---
+
+### TC-4.3 填空题答题（LLM 评判）
+```bash
+# 答对
+curl -X POST http://localhost:3000/api/v1/mock/answer \
+  --json '{"answer_text": "set", "course_id": ""}'
+
+# 答"不知道"（应判定为错误并给出正确答案和讲解）
+curl -X POST http://localhost:3000/api/v1/mock/answer \
+  --json '{"answer_text": "不知道", "course_id": ""}'
+```
+**预期**：
+- 答对：`grading_correct: true/false`，`grading_feedback` 含点评
+- 答不知道：判定为错误，反馈中包含标准答案
+
+---
+
+### TC-4.4 完整模考流程（9 道题）
+```bash
+# 启动
+curl -s -X POST http://localhost:3000/api/v1/mock/start --json {} | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['total'])"
+
+# 循环答题 9 次（ alternately 答对和答错）
+for i in {1..9}; do
+  if ((i % 2 == 0)); then
+    curl -s -X POST http://localhost:3000/api/v1/mock/answer \
+      --json '{"answer_text": "错误答案", "course_id": ""}' | python3 -c "import sys,json; d=json.load(sys.stdin)['data']; print(d.get('progress','done'), d.get('grading_correct','?'), d.get('error',''))"
+  else
+    curl -s -X POST http://localhost:3000/api/v1/mock/answer \
+      --json '{"correct": true, "course_id": ""}' | python3 -c "import sys,json; d=json.load(sys.stdin)['data']; print(d.get('progress','done'), d.get('error',''))"
+  fi
+done
+```
+**预期**：最后一轮返回模考总结（含正确率、薄弱知识点）
+
+---
+
+## 模块五：复习计划（FSRS）
+
+### TC-5.1 生成复习计划
+```bash
+curl -X POST http://localhost:3000/api/v1/review/schedule \
+  --json '{
+    "user_id": "test_user",
+    "course_id": "",
+    "top_k": 5,
+    "exam_date": "2026-09-15"
+  }'
+```
+**预期**：返回待复习知识点列表，按紧迫程度排序，含 `retrievability`（掌握度）和 `urgency_score`（紧迫指数）
+
+---
+
+### TC-5.2 记录答题结果（更新 FSRS 状态）
+```bash
+# 假设 chunk_id 从模考或检索结果中获取
+curl -X POST http://localhost:3000/api/v1/mock/record \
+  --json '{
+    "chunk_id": "chunk_L001",
+    "user_id": "test_user",
+    "correct": true
+  }'
+```
+**预期**：返回 `{"success": true}`，FSRS 参数（`stability`、`difficulty`）已更新
+
+---
+
+## 模块六：掌握度报告
+
+### TC-6.1 查看掌握度报告
+```bash
+curl -X POST http://localhost:3000/api/v1/mastery/report \
+  --json '{
+    "user_id": "test_user",
+    "course_id": ""
+  }'
+```
+**预期**：返回每个 lesson 的 `mastery_score`（0-100）和 `retrievability`，含新知识点标记
+
+---
+
+## 模块七：AI 辅导员（多智能体）
+
+### TC-7.1 课程相关问题（检索增强）
+```bash
+curl -X POST http://localhost:3000/api/v1/tutor/ask \
+  --json '{
+    "question": "列表的 append 和 extend 有什么区别？",
+    "user_id": "test_user",
+    "course_id": ""
+  }'
+```
+**预期**：返回带 `[参考N]` 引用标注的回答，内容来自课程知识库
+
+---
+
+### TC-7.2 超出课程范围的问题（模型知识回答）
+```bash
+curl -X POST http://localhost:3000/api/v1/tutor/ask \
+  --json '{
+    "question": "什么是机器学习中的梯度下降？",
+    "user_id": "test_user",
+    "course_id": ""
+  }'
+```
+**预期**：模型基于预训练知识回答（不调用外部搜索，符合平台限制）
+
+---
+
+### TC-7.3 代码执行
+```bash
+curl -X POST http://localhost:3000/api/v1/tutor/ask \
+  --json '{
+    "question": "运行这段代码：print([x**2 for x in range(5)])",
+    "user_id": "test_user",
+    "course_id": ""
+  }'
+```
+**预期**：代码执行结果 `stdout: [0, 1, 4, 9, 16]`
+
+---
+
+### TC-7.4 危险代码被拦截
+```bash
+curl -X POST http://localhost:3000/api/v1/tutor/ask \
+  --json '{
+    "question": "运行：import os; os.system(\"dir\")",
+    "user_id": "test_user",
+    "course_id": ""
+  }'
+```
+**预期**：`stdout` 为空或错误提示，`stderr` 说明 `os` 被禁用
+
+---
+
+### TC-7.5 生成练习题
+```bash
+curl -X POST http://localhost:3000/api/v1/tutor/ask \
+  --json '{
+    "question": "出一道关于 Python 字典的练习题",
+    "user_id": "test_user",
+    "course_id": ""
+  }'
+```
+**预期**：返回一道练习题（含题目、选项或填空要求）
+
+---
+
+## 模块八：聊天（完整对话流程）
+
+### TC-8.1 创建会话
+```bash
+curl -X POST http://localhost:3000/createSession \
+  --json '{"user_id": "test_user"}'
+```
+**预期**：返回 `session_id`
+
+---
+
+### TC-8.2 发送消息（触发多智能体）
+```bash
+curl -X POST http://localhost:3000/process/sync \
+  --json '{
+    "user_id": "test_user",
+    "session_id": "<上面返回的session_id>",
+    "message": "我刚学完列表，想做几道练习题检验一下"
+  }'
+```
+**预期**：Agent 调用 `tool_generate_quiz` 生成练习题，或调用 `tool_retrieve` 检索相关内容后讲解
+
+---
+
+## 测试检查清单
+
+| 功能 | 测试用例 | 验证点 |
+|------|---------|--------|
+| 知识库检索 | TC-1.2 | 返回带引用的相关结果 |
+| 文件上传 | TC-1.3 | chunks_ingested > 0 |
+| 学习引导 | TC-2.1~2.4 | 多轮交互后得到 CONFIRMED |
+| 课程生成 | TC-3.1 | 返回 course_id |
+| 模考启动 | TC-4.1 | 9 个 topics |
+| 选择题 | TC-4.2 | 直接判对错，返回下一题 |
+| 填空题 LLM 评判 | TC-4.3 | grading_correct + grading_feedback |
+| 模考结束 | TC-4.4 | 返回总结（含正确率） |
+| 复习计划 | TC-5.1 | 按紧迫度排序 |
+| 掌握度报告 | TC-6.1 | 每个 lesson 有分数 |
+| 检索增强问答 | TC-7.1 | 带 `[参考N]` 引用 |
+| 模型知识回答 | TC-7.2 | 不调用外部搜索 |
+| 代码执行 | TC-7.3 | 正常输出结果 |
+| 危险代码拦截 | TC-7.4 | 拒绝执行 |
+| 完整聊天 | TC-8.2 | 多智能体协作 |
