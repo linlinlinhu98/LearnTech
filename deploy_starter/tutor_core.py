@@ -788,7 +788,7 @@ def _mock_start(course_id: str, user_id: str) -> str:
             if s["chunk_id"] in weak_ids:
                 prioritized.append(s)
         prioritized.extend([s for s in selected if s["chunk_id"] not in weak_ids])
-        selected = prioritized[:3]
+        selected = prioritized[:]
 
     _mock_session[user_id] = {
         "state": "active",
