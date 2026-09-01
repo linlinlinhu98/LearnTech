@@ -53,7 +53,6 @@ except ImportError:  # Direct execution / local tests
     import tutor_core as _tutor_core_mod
     from tutor_core import build_tool_registry
     from file_parser import parse_file, SUPPORTED
-    from llm_utils import LlmBudget
 
 
 # ---- flat YAML config (no pyyaml) ----
@@ -486,7 +485,20 @@ async def mock_start(request: Request):
 @app.post("/api/v1/mock/answer")
 async def mock_answer(request: Request):
     """Process an answer: grade it with LLM, record result, return next question."""
-    body = await request.json()
+    try:
+        body = await request.json()
+    except UnicodeDecodeError:
+        import json as _json
+        raw = await request.body()
+        # Git Bash curl sends GBK-encoded body; decode with replacement
+        try:
+            body = _json.loads(raw.decode("gbk", errors="replace"))
+        except Exception:
+            body = _json.loads(raw.decode("utf-8", errors="replace"))
+    try:
+        from llm_utils import LlmBudget
+    except ImportError:
+        from .llm_utils import LlmBudget
     budget = LlmBudget(max_calls=8)
     result = await _tutor_core_mod.mock_exam(
         action="answer",
