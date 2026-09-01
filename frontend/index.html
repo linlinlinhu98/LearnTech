@@ -800,13 +800,8 @@ function submitAnswer() {
     mockBusy = true;
     api('/api/v1/mock/answer', {}).then(data => {
       mockBusy = false;
-      if (data.finished) {
-        currentQuestion = data;
-        renderMockQuestions();
-        return;
-      }
-      pendingQuestion = data;
-      showFeedback(correct, correct ? '' : '正确答案：' + currentQuestion.correct_answer);
+      currentQuestion = data;
+      renderMockQuestions();
     }).catch(e => {
       mockBusy = false;
       showToast('加载下一题失败: ' + e.message);
@@ -821,12 +816,14 @@ function submitAnswer() {
     mockBusy = true;
     api('/api/v1/mock/answer', { answer_text: text, course_id: COURSE_ID }).then(data => {
       mockBusy = false;
-      if (data.finished) { currentQuestion = data; renderMockQuestions(); return; }
       const isCorrect = data.grading_correct === true;
       mockResults.push({ chunk_id: currentQuestion.chunk_id, correct: isCorrect });
-      pendingQuestion = data;
       showFeedback(isCorrect, data.grading_feedback || (isCorrect ? '' : '正确答案：' + (data.correct_answer || '')));
       btn.style.display = 'none';
+      setTimeout(() => {
+        currentQuestion = data;
+        renderMockQuestions();
+      }, 3000);
     }).catch(e => {
       mockBusy = false;
       showToast('评判失败: ' + e.message);
@@ -839,14 +836,9 @@ function submitAnswer() {
 function showFeedback(correct, extraText) {
   const feedback = document.getElementById('quizFeedback');
   if (!feedback) return;
-  const actions = document.getElementById('quizActions');
   feedback.style.display = '';
   if (correct) {
     feedback.innerHTML = `<span style="color:var(--success)">回答正确！</span> ${extraText ? '<span style="color:var(--muted);margin-left:6px">'+extraText+'</span>' : ''}`;
-    if (actions) {
-      actions.innerHTML = `<button class="btn btn-primary" onclick="advanceQuestion()">下一题</button>`;
-      lucide.createIcons();
-    }
   } else {
     feedback.innerHTML = `<span style="color:var(--danger)">${extraText || '回答错误'}</span>`;
     const btn = document.getElementById('quizSubmit');
@@ -860,33 +852,12 @@ function skipQuestion() {
   mockBusy = true;
   api('/api/v1/mock/answer', {}).then(data => {
     mockBusy = false;
-    if (data.finished) {
-      currentQuestion = data;
-      pendingQuestion = null;
-      renderMockQuestions();
-      return;
-    }
-    // Navigate to next question and prepare it for grading
     currentQuestion = data;
-    pendingQuestion = data;
     renderMockQuestions();
   }).catch(e => {
     mockBusy = false;
     showToast('加载下一题失败: ' + e.message);
   });
-}
-
-async function advanceQuestion() {
-  if (mockBusy) return;
-  // Use the next question that submitAnswer already fetched
-  if (!pendingQuestion) {
-    showToast('题目加载异常，请刷新重试');
-    return;
-  }
-  selectedOption = null;
-  currentQuestion = pendingQuestion;
-  pendingQuestion = null;
-  renderMockQuestions();
 }
 
 // ── Dashboard ───────────────────────────────────────────────────
