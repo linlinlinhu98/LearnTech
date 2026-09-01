@@ -759,7 +759,7 @@ def _mock_start(course_id: str, user_id: str) -> str:
             "error": "知识库为空，请先导入材料或生成课程。",
         }, ensure_ascii=False)
 
-    # Pick up to 3 chunks from different lessons for variety
+    # Pick up to all chunks from different lessons for variety
     lesson_groups: dict[str, list] = {}
     for chunk in all_chunks:
         lid = chunk.lesson_id or "unknown"
@@ -767,9 +767,9 @@ def _mock_start(course_id: str, user_id: str) -> str:
             lesson_groups[lid] = []
         lesson_groups[lid].append(chunk)
 
-    # Select up to 3 lessons
+    # Select all lessons (one chunk each)
     selected: list[dict] = []
-    for lid, chunks in list(lesson_groups.items())[:3]:
+    for lid, chunks in list(lesson_groups.items()):
         import random
         ch = random.choice(chunks)
         selected.append({
@@ -987,40 +987,44 @@ async def _mock_answer(
         difficulty = "easy"
 
     # Generate question via LLM — vary question type by index for variety
-    question_types = ["single_choice", "fill_blank", "short_answer", "single_choice", "fill_blank"]
+    question_types = ["single_choice", "fill_blank", "short_answer", "single_choice", "fill_blank", "single_choice"]
     qtype = question_types[session.get("current_index", 0) % len(question_types)]
 
     if qtype == "single_choice":
         system_msg = (
-            "你是一位Python数据分析助教。根据【课程内容】出1道单选题，题目中必须包含课程内容里出现的具体代码或术语。\n"
+            "你是一位Python数据分析助教。根据【课程内容】出1道单选题。\n"
+            "要求：题目必须基于课程内容中的具体代码/函数/概念，不能泛泛而问。\n"
             "严格遵循以下JSON格式（不要输出任何其他内容）：\n"
-            '{"question":"在Python中，list和dict的主要区别是？\\nA. list有序dict无序\\nB. list用[]访问dict用[]访问\\nC. list可修改dict不可修改\\nD. list元素不重复dict元素可重复","options":["A. list有序dict无序","B. list用[]访问dict用[]访问","C. list可修改dict不可修改","D. list元素不重复dict元素可重复"],"answer":"A"}'
+            '{"question":"...","options":["A. ...","B. ...","C. ...","D. ..."],"answer":"A"}'
         )
         user_msg = (
-            f"【课程内容】（必须基于这段内容出题，禁止脱离这段内容编造）：\n{chunk_text}\n\n"
-            f"难度：{difficulty}\n出1道与上述课程内容直接相关的单选题。"
+            f"【课程内容】\n{chunk_text}\n\n"
+            f"【难度】{difficulty}\n"
+            "请出一道与上述课程内容直接相关的单选题。"
         )
     elif qtype == "fill_blank":
         system_msg = (
-            "你是一位Python数据分析助教。根据【课程内容】出1道填空题，"
-            "答案必须是课程内容里出现过的具体代码、函数名或术语。\n"
+            "你是一位Python数据分析助教。根据【课程内容】出1道填空题。\n"
+            "要求：空格处必须是课程内容中出现过的具体代码、函数名、术语或语法。\n"
             "严格遵循以下JSON格式（不要输出任何其他内容）：\n"
-            '{"question":"在Python中，创建空列表的语句是___","options":[],"answer":"[]"}'
+            '{"question":"...___...","options":[],"answer":"..."}'
         )
         user_msg = (
-            f"【课程内容】（必须基于这段内容出题，禁止脱离这段内容编造）：\n{chunk_text}\n\n"
-            f"难度：{difficulty}\n出1道与上述课程内容直接相关的填空题。"
+            f"【课程内容】\n{chunk_text}\n\n"
+            f"【难度】{difficulty}\n"
+            "请出一道与上述课程内容直接相关的填空题。"
         )
     else:
         system_msg = (
-            "你是一位Python数据分析助教。根据【课程内容】出1道简答题，"
-            "题目必须涉及课程内容中出现的具体代码示例或概念对比。\n"
+            "你是一位Python数据分析助教。根据【课程内容】出1道简答题。\n"
+            "要求：题目要涉及课程内容的核心概念或代码示例，可以要求解释概念、对比区别、写代码等。\n"
             "严格遵循以下JSON格式（不要输出任何其他内容）：\n"
-            '{"question":"请写出列表推导式[表达式 for 变量 in 可迭代对象]的完整语法，并举一个实际例子","options":[],"answer":""}'
+            '{"question":"...","options":[],"answer":""}'
         )
         user_msg = (
-            f"【课程内容】（必须基于这段内容出题，禁止脱离这段内容编造）：\n{chunk_text}\n\n"
-            f"难度：{difficulty}\n出1道与上述课程内容直接相关的简答题。"
+            f"【课程内容】\n{chunk_text}\n\n"
+            f"【难度】{difficulty}\n"
+            "请出一道与上述课程内容直接相关的简答题。"
         )
 
     messages = [
